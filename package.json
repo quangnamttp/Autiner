@@ -1,7 +1,7 @@
 {
   "name": "autiner",
   "version": "1.2.0",
-  "description": "Telegram futures bot (VN time, Render hosting)",
+  "description": "Telegram futures bot (webhook, VN time, Render hosting)",
   "main": "index.js",
   "type": "module",
   "scripts": {
