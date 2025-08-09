@@ -19,7 +19,7 @@ export function startOnusPoller(opt = {}) {
     try {
       const rows = await getOnusSnapshot();
       lastGood = { rows, fetchedAt: Date.now() };
-    } catch (e) {
+    } catch (_e) {
       // Giữ lastGood, lần sau thử tiếp
     }
   }
@@ -50,7 +50,7 @@ export async function getOnusSnapshotCached(opt = {}) {
       const rows = await getOnusSnapshot();
       lastGood = { rows, fetchedAt: Date.now() };
       return rows;
-    } catch (e) {
+    } catch (_e) {
       await new Promise(r => setTimeout(r, 250));
     }
   }
@@ -61,4 +61,14 @@ export async function getOnusSnapshotCached(opt = {}) {
   }
 
   throw new Error('Onus không có dữ liệu hợp lệ (>10 phút)');
+}
+
+/**
+ * Meta để lệnh /source hiển thị
+ * @returns {{fetchedAt:number|null, ageSec:number|null, hasData:boolean}}
+ */
+export function getOnusMeta() {
+  if (!lastGood) return { fetchedAt: null, ageSec: null, hasData: false };
+  const ageSec = Math.max(0, Math.round((Date.now() - lastGood.fetchedAt) / 1000));
+  return { fetchedAt: lastGood.fetchedAt, ageSec, hasData: !!(lastGood.rows?.length) };
 }
