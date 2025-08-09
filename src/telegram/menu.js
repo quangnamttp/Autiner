@@ -1,25 +1,31 @@
-import { getConfig, setActiveExchange } from '../storage/configRepo.js';
+// src/telegram/menu.js
 import { sendMessage } from './bot.js';
+import { getConfig } from '../storage/configRepo.js';
 
-const EXCHANGES = ['ONUS', 'MEXC', 'NAMI'];
+function mark(active, name) {
+  return active === name ? `✅ ${name}` : name;
+}
 
 export async function buildMainMenu() {
   const cfg = await getConfig();
+  const ex = (cfg.active_exchange || 'ONUS').toUpperCase();
+
   const rows = [];
-
-  rows.push(EXCHANGES.map(ex => ({
-    text: ex === cfg.active_exchange ? `✅ ${ex}` : ex,
-    callback_data: `EXCHANGE:${ex}`
-  })));
-
+  // hàng chọn sàn
+  rows.push([
+    { text: mark(ex, 'ONUS'), callback_data: 'EX:ONUS' },
+    { text: mark(ex, 'MEXC'), callback_data: 'EX:MEXC' },
+    { text: mark(ex, 'NAMI'), callback_data: 'EX:NAMI' }
+  ]);
+  // lịch vĩ mô
   rows.push([
     { text: '📅 Lịch hôm nay', callback_data: 'CAL:today' },
     { text: '📅 Ngày mai',     callback_data: 'CAL:tomorrow' },
     { text: '📅 Cả tuần',      callback_data: 'CAL:week' }
   ]);
-
-  rows.push([{ text: '🔎 Trạng thái bot', callback_data: 'STATUS:show' }]);
-  rows.push([{ text: '🧪 Test toàn bộ',    callback_data: 'TEST:all' }]);
+  // trạng thái + test
+  rows.push([{ text: '🔎 Trạng thái bot',    callback_data: 'STATUS:show' }]);
+  rows.push([{ text: '🧪 Test toàn bộ (NOW)', callback_data: 'TEST:all' }]);
 
   return { inline_keyboard: rows };
 }
@@ -28,31 +34,42 @@ export async function handleMenuAction(cb) {
   const chatId = cb.message.chat.id;
   const data = cb.data || '';
 
-  if (data.startsWith('EXCHANGE:')) {
+  if (data.startsWith('EX:')) {
     const ex = data.split(':')[1];
-    if (!EXCHANGES.includes(ex)) return sendMessage(chatId, 'Sàn không hợp lệ.');
-    await setActiveExchange(ex);
+    const { switchExchange } = await import('../actions/switchExchange.js');
+    await switchExchange(ex);
     const menu = await buildMainMenu();
-    return sendMessage(chatId, `Đã chuyển sang <b>${ex}</b>. Tất cả tín hiệu sẽ theo sàn này.`, { reply_markup: menu });
+    await sendMessage(chatId, `Đã chuyển sang <b>${ex}</b>. Tất cả tín hiệu sẽ theo sàn này.`, { reply_markup: menu });
+    return;
   }
 
   if (data.startsWith('CAL:')) {
-    return sendMessage(chatId, '📅 Lịch vĩ mô sẽ hiển thị lúc <b>07:00</b> (Batch 3 lấy từ ForexFactory).');
+    // Batch vĩ mô 07:00 sẽ gửi tự động; nút này để xem nhanh placeholder
+    const kind = data.split(':')[1];
+    const text =
+      kind === 'today'    ? '📅 Tin vĩ mô hôm nay (sẽ lấy từ ForexFactory, lọc High Impact)':
+      kind === 'tomorrow' ? '📅 Tin vĩ mô ngày mai (sẽ lấy từ ForexFactory)':
+                            '📅 Lịch cả tuần (sẽ lấy từ ForexFactory)';
+    return sendMessage(chatId, text);
   }
 
   if (data === 'STATUS:show') {
     const cfg = await getConfig();
-    const text = [
+    const ex = (cfg.active_exchange || 'ONUS').toUpperCase();
+    const msg = [
       '<b>Trạng thái bot</b>',
-      `• Sàn đang dùng: <b>${cfg.active_exchange}</b>`,
+      `• Sàn đang dùng: <b>${ex}</b> (không lấy chéo sàn)`,
       '• Khung giờ: 06:15–21:45 (30p), 06:00 chào sáng, 07:00 lịch vĩ mô, 22:00 tổng kết',
-      '• Tần suất: 30 phút (cố định)'
+      '• Tín hiệu: ưu tiên 5/5; thiếu thì ≥3/5'
     ].join('\n');
-    return sendMessage(chatId, text);
+    return sendMessage(chatId, msg);
   }
 
   if (data === 'TEST:all') {
-    return sendMessage(chatId, '[TEST] Scheduler + format sẵn sàng. Dữ liệu Onus thật sẽ ghép ở Batch 3.');
+    const { runTestNow } = await import('../actions/testNow.js');
+    await sendMessage(chatId, '🔧 Đang chạy 1 batch thử ngay bây giờ…');
+    await runTestNow();
+    return;
   }
 
   return sendMessage(chatId, 'Không hiểu thao tác. Hãy mở /menu lại nhé.');
