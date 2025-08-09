@@ -8,10 +8,10 @@ INSERT INTO config (key, value)
 VALUES ('app', '{"active_exchange":"ONUS"}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
-CREATE TABLE IF NOT EXISTS audit_log (
-  id SERIAL PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  action TEXT NOT NULL,
-  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+-- bảng ghi log lỗi nguồn dữ liệu
+CREATE TABLE IF NOT EXISTS errors (
+  id BIGSERIAL PRIMARY KEY,
+  exchange TEXT NOT NULL,
+  error_message TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
