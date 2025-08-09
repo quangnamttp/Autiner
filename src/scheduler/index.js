@@ -1,16 +1,22 @@
+// src/scheduler/index.js
 import cron from 'node-cron';
 import { sendMessage } from '../telegram/bot.js';
 import { getConfig } from '../storage/configRepo.js';
 import { batchHeader, signalMessage } from '../telegram/format.js';
-import { pickTop5SignalsFromOnus } from '../signals/generator.js';
-import { startOnusPoller, getOnusSnapshotCached } from '../sources/onus/cache.js';
+import { pickSignals } from '../signals/generator.js';
+import {
+  startOnusPoller,
+  getOnusSnapshotCached,
+  getOnusLastGood,
+  getOnusMeta
+} from '../sources/onus/cache.js';
 import { logSourceError } from '../storage/errorRepo.js';
 
 const CHAT_ID = process.env.ALLOWED_TELEGRAM_USER_ID;
 const TZ = process.env.TZ || 'Asia/Ho_Chi_Minh';
 
 let isBatchRunning = false;
-let lastOnusAlertAt = 0;
+let lastAlertAt = 0;
 
 function nextSlotString(date = new Date()) {
   const d = new Date(date);
@@ -23,7 +29,7 @@ function nextSlotString(date = new Date()) {
 }
 
 export function startSchedulers() {
-  // Poll ONUS nền để luôn có snapshot gần nhất
+  // Khởi động poll ONUS (sàn đã có dữ liệu thật)
   startOnusPoller({ intervalMs: 20000 });
 
   // 06:00 — chào sáng
@@ -49,38 +55,74 @@ export function startSchedulers() {
 
     try {
       const cfg = await getConfig();
-      const ex = cfg.active_exchange || 'ONUS';
+      const ex = (cfg.active_exchange || 'ONUS').toUpperCase(); // ONUS/MEXC/NAMI
       const nextTime = nextSlotString();
-
       await sendMessage(CHAT_ID, batchHeader(nextTime, ex));
 
       if (ex === 'ONUS') {
+        let staleNote = '';
         try {
-          const snapshot = await getOnusSnapshotCached({ maxAgeSec: 120, quickRetries: 3 });
-          const signals = pickTop5SignalsFromOnus(snapshot);
-          if (!signals.length) throw new Error('Không có tín hiệu phù hợp.');
-
-          for (const s of signals) {
-            await sendMessage(CHAT_ID, signalMessage(s));
-            await new Promise(r => setTimeout(r, 250));
+          const metaBefore = getOnusMeta();
+          const freshRows = await getOnusSnapshotCached({ maxAgeSec: 120, quickRetries: 3 });
+          const metaAfter = getOnusMeta();
+          if (metaAfter.ageSec && metaAfter.ageSec > 120) {
+            staleNote = `\n(ℹ️ Dùng snapshot ONUS cũ ~${metaAfter.ageSec}s)`;
+          } else if (metaBefore.fetchedAt && metaAfter.fetchedAt === metaBefore.fetchedAt && metaAfter.ageSec > 120) {
+            staleNote = `\n(ℹ️ Dùng snapshot ONUS cũ ~${metaAfter.ageSec}s)`;
           }
+
+          // ƯU TIÊN đủ 5 kèo
+          let signals = pickSignals(freshRows, 5, 'VND');
+
+          // BƯỚC BÙ từ last-good (≤60’) – vẫn là ONUS, không lấy chéo
+          if (signals.length < 5) {
+            const last = getOnusLastGood();
+            if (last && (Date.now() - last.fetchedAt) / 1000 <= 3600) {
+              const used = new Set(signals.map(s => s.symbol));
+              const extraRows = (last.rows || []).filter(r => !used.has(r.symbol));
+              if (extraRows.length) {
+                const extra = pickSignals(extraRows, 5 - signals.length, 'VND');
+                for (const e of extra) e.reason = (e.reason ? e.reason + ' ' : '') + '• nguồn: snapshot cũ';
+                signals = signals.concat(extra);
+              }
+            }
+          }
+
+          // Nếu vẫn không đủ 5 nhưng có ≥3 → vẫn gửi
+          if (signals.length >= 3) {
+            for (const s of signals) {
+              await sendMessage(CHAT_ID, signalMessage(s));
+              await new Promise(r => setTimeout(r, 200));
+            }
+            if (staleNote) await sendMessage(CHAT_ID, staleNote);
+            return;
+          }
+
+          // <3 kèo → cảnh báo & bỏ batch (an toàn)
+          throw new Error(`Không đủ tín hiệu (có ${signals.length}/5, yêu cầu tối thiểu 3)`);
         } catch (err) {
           const msg = String(err?.message || err);
-          await logSourceError('ONUS', msg); // ⬅ ghi log lỗi vào DB
+          await logSourceError('ONUS', msg);
 
           const now = Date.now();
-          if (now - lastOnusAlertAt > 10 * 60 * 1000) {
-            lastOnusAlertAt = now;
+          if (now - lastAlertAt > 10 * 60 * 1000) {
+            lastAlertAt = now;
             await sendMessage(
               CHAT_ID,
-              `⚠️ Onus dữ liệu không đạt chuẩn (${msg}).\nĐã cố gắng lấy dữ liệu trong 30p vừa qua nhưng thất bại.\nGõ /source để kiểm tra tuổi dữ liệu.`
+              `⚠️ ONUS không đủ dữ liệu để tạo 3 tín hiệu tối thiểu (${msg}).\nGõ /source để kiểm tra tuổi dữ liệu.`
             );
           }
           return;
         }
-      } else {
-        // Chưa bật dữ liệu thật cho MEXC/NAMI
-        await sendMessage(CHAT_ID, '⚠️ Chế độ mock dữ liệu cho sàn khác.');
+      }
+
+      // Các sàn khác (MEXC/NAMI) — KHÔNG lấy chéo. Nếu chưa cấu hình dữ liệu thật, báo rõ & bỏ batch.
+      if (ex === 'MEXC' || ex === 'NAMI') {
+        await sendMessage(
+          CHAT_ID,
+          `⚠️ Sàn ${ex} chưa được cấu hình nguồn dữ liệu thật. Bỏ batch để tránh sai giá.`
+        );
+        return;
       }
     } finally {
       isBatchRunning = false;
