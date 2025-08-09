@@ -4,37 +4,33 @@ import { getOnusSnapshot } from './scrape.js';
 let lastGood = null; // { rows, fetchedAt }
 let polling = false;
 
-/**
- * Khởi động poll dữ liệu ONUS định kỳ.
- * @param {object} opt
- * @param {number} opt.intervalMs  Chu kỳ poll (mặc định 20000ms)
- */
+/** Poll ONUS định kỳ (06:00–22:00 tăng nhịp) */
 export function startOnusPoller(opt = {}) {
   if (polling) return;
   polling = true;
 
-  const intervalMs = Number(opt.intervalMs) || 20000;
+  const base = Number(opt.intervalMs) || 20000;
 
   async function tick() {
+    const now = new Date();
+    const h = now.getHours();
+    const active = h >= 6 && h <= 22;
+    const intervalMs = active ? Math.min(10000, base) : base;
+
     try {
-      const rows = await getOnusSnapshot();
+      const rows = await getOnusSnapshot();   // lấy snapshot mới
       lastGood = { rows, fetchedAt: Date.now() };
     } catch (_e) {
-      // Giữ lastGood, lần sau thử tiếp
+      // giữ lastGood, lần sau thử tiếp
+    } finally {
+      setTimeout(tick, intervalMs);
     }
   }
 
   tick(); // chạy ngay 1 lần
-  setInterval(tick, intervalMs);
 }
 
-/**
- * Lấy snapshot ưu tiên từ cache, thử nhanh nếu cache quá hạn.
- * @param {object} opt
- * @param {number} opt.maxAgeSec    Tuổi tối đa cho cache (mặc định 120s)
- * @param {number} opt.quickRetries Số lần thử nhanh nếu cache quá hạn (mặc định 3)
- * @returns {Promise<Array>}
- */
+/** Lấy snapshot ưu tiên cache; nếu quá hạn → retry; nếu vẫn fail → dùng last-good ≤ 60' */
 export async function getOnusSnapshotCached(opt = {}) {
   const maxAgeSec = Number(opt.maxAgeSec) || 120;
   const quickRetries = Number(opt.quickRetries) || 3;
@@ -44,7 +40,6 @@ export async function getOnusSnapshotCached(opt = {}) {
     return lastGood.rows;
   }
 
-  // Cache quá hạn → thử nhanh
   for (let i = 0; i < quickRetries; i++) {
     try {
       const rows = await getOnusSnapshot();
@@ -55,20 +50,21 @@ export async function getOnusSnapshotCached(opt = {}) {
     }
   }
 
-  // Không lấy được → dùng last-good nếu ≤ 10 phút
-  if (lastGood && (now - lastGood.fetchedAt) / 1000 <= 600) {
+  if (lastGood && (now - lastGood.fetchedAt) / 1000 <= 3600) {
     return lastGood.rows;
   }
 
-  throw new Error('Onus không có dữ liệu hợp lệ (>10 phút)');
+  throw new Error('Onus không có dữ liệu hợp lệ (>60 phút)');
 }
 
-/**
- * Meta để lệnh /source hiển thị
- * @returns {{fetchedAt:number|null, ageSec:number|null, hasData:boolean}}
- */
+/** Meta cho /source */
 export function getOnusMeta() {
   if (!lastGood) return { fetchedAt: null, ageSec: null, hasData: false };
   const ageSec = Math.max(0, Math.round((Date.now() - lastGood.fetchedAt) / 1000));
   return { fetchedAt: lastGood.fetchedAt, ageSec, hasData: !!(lastGood.rows?.length) };
+}
+
+/** ⬅️ HÀM NÀY LÀ NGUYÊN NHÂN THIẾU — thêm export để scheduler dùng bù kèo */
+export function getOnusLastGood() {
+  return lastGood; // { rows, fetchedAt } | null
 }
