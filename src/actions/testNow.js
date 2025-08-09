@@ -1,9 +1,9 @@
-// src/actions/testNow.js
 import { sendMessage } from '../telegram/bot.js';
 import { getConfig } from '../storage/configRepo.js';
 import { batchHeader, signalMessage } from '../telegram/format.js';
 import { pickTop5SignalsFromOnus } from '../signals/generator.js';
 import { getOnusSnapshotCached } from '../sources/onus/cache.js';
+import { logSourceError } from '../storage/errorRepo.js';
 
 const CHAT_ID = process.env.ALLOWED_TELEGRAM_USER_ID;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -30,11 +30,13 @@ export async function runTestNow() {
       }
       return;
     } catch (e) {
-      await sendMessage(CHAT_ID, `⚠️ Onus dữ liệu không đạt chuẩn (${e.message}). Batch NOW dừng.`);
+      const msg = String(e?.message || e);
+      await logSourceError('ONUS', msg); // ⬅ ghi log lỗi
+      await sendMessage(CHAT_ID, `⚠️ Onus dữ liệu không đạt chuẩn (${msg}). Batch NOW dừng.`);
       return;
     }
   }
 
-  // Mock cho MEXC/NAMI nếu cần
+  // Mock cho MEXC/NAMI (khi chưa bật dữ liệu thật)
   await sendMessage(CHAT_ID, '⚠️ Chế độ mock dữ liệu cho sàn khác.');
 }
