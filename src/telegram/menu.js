@@ -33,18 +33,18 @@ export async function handleMenuAction(cb) {
     if (!EXCHANGES.includes(ex)) return sendMessage(chatId, 'Sàn không hợp lệ.');
     await setActiveExchange(ex);
     const menu = await buildMainMenu();
-    return sendMessage(chatId, `Đã chuyển sang *${ex}*\\. Tất cả tín hiệu sẽ theo sàn này\\.`, { reply_markup: menu });
+    return sendMessage(chatId, `Đã chuyển sang <b>${ex}</b>. Tất cả tín hiệu sẽ theo sàn này.`, { reply_markup: menu });
   }
 
   if (data.startsWith('CAL:')) {
-    return sendMessage(chatId, '📅 Lịch vĩ mô sẽ bật ở *Batch 3* (ForexFactory, high impact, dịch chuẩn VN)\\.');
+    return sendMessage(chatId, '📅 Lịch vĩ mô sẽ hiển thị lúc <b>07:00</b> (Batch 3 lấy từ ForexFactory).');
   }
 
   if (data === 'STATUS:show') {
     const cfg = await getConfig();
     const text = [
-      '*Trạng thái bot*',
-      `• Sàn đang dùng: *${cfg.active_exchange}*`,
+      '<b>Trạng thái bot</b>',
+      `• Sàn đang dùng: <b>${cfg.active_exchange}</b>`,
       '• Khung giờ: 06:15–21:45 (30p), 06:00 chào sáng, 07:00 lịch vĩ mô, 22:00 tổng kết',
       '• Tần suất: 30 phút (cố định)'
     ].join('\n');
@@ -52,8 +52,8 @@ export async function handleMenuAction(cb) {
   }
 
   if (data === 'TEST:all') {
-    return sendMessage(chatId, '[TEST] Scheduler + format sẵn sàng\\. Dữ liệu Onus thật sẽ ghép ở Batch 3\\.');
+    return sendMessage(chatId, '[TEST] Scheduler + format sẵn sàng. Dữ liệu Onus thật sẽ ghép ở Batch 3.');
   }
 
-  return sendMessage(chatId, 'Không hiểu thao tác\\. Hãy mở /menu lại nhé\\.');
+  return sendMessage(chatId, 'Không hiểu thao tác. Hãy mở /menu lại nhé.');
 }
