@@ -1,49 +1,73 @@
 // src/signals/fiveMaker.js
-// Bảo đảm luôn tạo đủ 5 tín hiệu từ dữ liệu ONUS (không báo lỗi, không chéo sàn)
+// Đảm bảo luôn đủ 5 tín hiệu ONUS, không báo lỗi, không chéo sàn.
+// Chiến lược:
+// 1) Lấy snapshot tươi (cache).
+// 2) Nếu <5, ép scraper chạy ngay 2–3 lần để tạo snapshot mới và lưu DB.
+// 3) Nếu vẫn <5, gom từ kho 6h (mở rộng tối đa 24h nếu cần) cho đủ 5.
 
 import { getOnusSnapshotCached } from '../sources/onus/cache.js';
-import { getOnusRowsFromHistory } from '../storage/onusRepo.js';
+import { getOnusRowsFromHistory, saveOnusSnapshot } from '../storage/onusRepo.js';
 import { pickSignals } from './generator.js';
+import { getOnusSnapshot } from '../sources/onus/scrape.js';
 
-/**
- * Tạo đúng 5 tín hiệu ONUS:
- * 1) Dùng snapshot mới nhất (cache/quick-retry)
- * 2) Nếu <5, bổ sung từ kho DB (6h gần nhất) cho đủ 5 (vẫn dữ liệu ONUS)
- * 3) Nếu vẫn <5 (rất hiếm), cố chọn lặp theo symbol khác trong kho để đủ 5
- */
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function forceWarmUp(attempts = 2) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const rows = await getOnusSnapshot();           // ép scraper (có puppeteer fallback)
+      await saveOnusSnapshot(rows, Date.now());       // lưu kho
+    } catch (_e) {
+      // bỏ qua, thử lần sau
+    }
+    await sleep(500);
+  }
+}
+
+function uniqBySymbol(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const x of arr) {
+    const k = (x.symbol || '').trim();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(x);
+  }
+  return out;
+}
+
 export async function makeFiveOnusSignals() {
-  // 1) snapshot tươi
-  const fresh = await getOnusSnapshotCached({ maxAgeSec: 120, quickRetries: 3 });
+  // 1) lấy snapshot tươi (cache)
+  let fresh = await getOnusSnapshotCached({ maxAgeSec: 120, quickRetries: 3 });
   let signals = pickSignals(fresh, 5, 'VND');
 
   if (signals.length >= 5) return signals;
 
-  // 2) bổ sung từ kho DB (6 giờ)
-  const poolRows = await getOnusRowsFromHistory(360);
+  // 2) ép warm-up 2 lần để chắc có dữ liệu
+  await forceWarmUp(2);
+  fresh = await getOnusSnapshotCached({ maxAgeSec: 120, quickRetries: 3 });
+  signals = pickSignals(fresh, 5, 'VND');
+  if (signals.length >= 5) return signals;
+
+  // 3) bổ sung từ kho 6h gần nhất
+  let poolRows = await getOnusRowsFromHistory(360);
   if (poolRows.length) {
+    // tránh trùng symbol
     const used = new Set(signals.map(s => s.symbol));
-    const candidates = poolRows.filter(r => !used.has(r.symbol));
-    if (candidates.length) {
-      const extra = pickSignals(candidates, 5 - signals.length, 'VND');
-      signals = signals.concat(extra);
-    }
+    const extraRows = poolRows.filter(r => !used.has(r.symbol));
+    const extra = pickSignals(extraRows, 5 - signals.length, 'VND');
+    signals = uniqBySymbol([...signals, ...extra]);
+    if (signals.length >= 5) return signals;
   }
 
-  // 3) nếu vẫn thiếu, thử nới tiếp từ pool (cho phép trùng mode/symbol khác)
-  if (signals.length < 5 && poolRows.length) {
-    const extra = pickSignals(poolRows, 5 - signals.length, 'VND');
-    // lọc trùng symbol nếu có
-    const final = [];
-    const seen = new Set();
-    for (const s of [...signals, ...extra]) {
-      if (seen.has(s.symbol)) continue;
-      seen.add(s.symbol);
-      final.push(s);
-      if (final.length === 5) break;
-    }
-    signals = final;
+  // 4) lần cuối: ép warm-up thêm 1 lần + mở rộng kho 24h
+  await forceWarmUp(1);
+  poolRows = await getOnusRowsFromHistory(1440);
+  if (poolRows.length) {
+    const extraFinal = pickSignals(poolRows, 5 - signals.length, 'VND');
+    signals = uniqBySymbol([...signals, ...extraFinal]);
   }
 
-  // nếu vẫn ít hơn 5: trả về những gì có (khả năng cực thấp khi mới khởi động)
+  // Trả đúng 5 (nếu vẫn thiếu, trả theo số có — nhưng sau bước warm-up thường sẽ đủ)
   return signals.slice(0, 5);
 }
