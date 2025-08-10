@@ -1,52 +1,107 @@
-import aiohttp
+# bots/handlers/top.py
 import asyncio
+import aiohttp
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
-# Lưu cache dữ liệu để khi gọi /top thì trả ra nhanh
-_top_cache = []
-_lock = asyncio.Lock()
+UPDATE_INTERVAL = 300  # 5 phút
+TOP_LIMIT = 20
 
-async def fetch_top_coins():
-    """Lấy top 30 coin volume cao từ API Onus"""
-    global _top_cache
-    url = "https://api.onus.io/exchange/v1/market/24h-tickers"  # API công khai của Onus
+# cache dùng chung
+_TOP = []
+_FETCHING = False
+
+# Một số endpoint của ONUS (tùy lúc site đổi, ta thử lần lượt)
+ONUS_TICKERS_URLS = [
+    # (ưu tiên) gateway chính
+    "https://api-gateway.onus.io/futures/api/v1/market/tickers",
+    # fallback khác (nếu có)
+    "https://api.onus.io/futures/api/v1/market/tickers",
+]
+
+def _fmt_billion(v: float) -> str:
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                coins = sorted(
-                    data["data"], 
-                    key=lambda x: float(x["quoteVolume"]), 
-                    reverse=True
-                )[:30]
+        v = float(v)
+    except Exception:
+        return "-"
+    if v >= 1_000_000_000:
+        return f"{v/1_000_000_000:.1f}B"
+    if v >= 1_000_000:
+        return f"{v/1_000_000:.1f}M"
+    return f"{v:,.0f}"
 
-                _top_cache = [
-                    f"{i+1}. {c['symbol']}  Vol: {float(c['quoteVolume']):,.0f}  ({float(c['priceChangePercent']):+.2f}%)"
-                    for i, c in enumerate(coins)
-                ]
-    except Exception as e:
-        print("Lỗi fetch_top_coins:", e)
+async def _fetch_once(session: aiohttp.ClientSession, url: str):
+    async with session.get(url, timeout=10) as r:
+        j = await r.json()
+        data = j.get("data") or j  # một số API trả trực tiếp list
+        if not isinstance(data, list):
+            return []
+        out = []
+        for it in data:
+            # Chuẩn hóa field (vì mỗi endpoint tên hơi khác)
+            sym = it.get("symbol") or it.get("pair") or it.get("token") or "-"
+            price = it.get("lastPrice") or it.get("priceVnd") or it.get("lastPriceVnd") or it.get("last")
+            change = it.get("priceChangePercent") or it.get("changePercent") or it.get("percentChange")
+            vol = it.get("quoteVolume") or it.get("volumeValueVnd") or it.get("quoteVolumeVnd") or it.get("volume")
+            try:
+                price = float(price) if price is not None else None
+            except Exception:
+                price = None
+            try:
+                change = float(change) if change is not None else 0.0
+            except Exception:
+                change = 0.0
+            try:
+                vol = float(vol) if vol is not None else 0.0
+            except Exception:
+                vol = 0.0
+            out.append({"symbol": sym, "price": price, "change": change, "vol": vol})
+        # sắp xếp theo vol giảm dần
+        out.sort(key=lambda x: x["vol"], reverse=True)
+        return out[:TOP_LIMIT]
 
-async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Trả về danh sách top coin khi người dùng gọi /top"""
-    if not _top_cache:
-        await update.message.reply_text("⏳ Đang tải dữ liệu...")
-        await fetch_top_coins()
+async def refresh_top():
+    global _TOP, _FETCHING
+    if _FETCHING:
+        return
+    _FETCHING = True
+    try:
+        async with aiohttp.ClientSession() as s:
+            for url in ONUS_TICKERS_URLS:
+                try:
+                    top = await _fetch_once(s, url)
+                    if top:
+                        _TOP = top
+                        break
+                except Exception:
+                    continue
+    finally:
+        _FETCHING = False
 
-    text = "🏆 TOP 30 COIN VOLUME CAO (ONUS)\n" + "\n".join(_top_cache)
-    await update.message.reply_text(text)
+async def updater_loop():
+    while True:
+        await refresh_top()
+        await asyncio.sleep(UPDATE_INTERVAL)
+
+async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # lần đầu chưa có cache → refresh nhanh
+    if not _TOP:
+        await update.message.reply_text("⏳ Đang tải dữ liệu Onus…")
+        await refresh_top()
+        if not _TOP:
+            await update.message.reply_text("⚠️ Hiện chưa lấy được dữ liệu. Thử lại sau nhé.")
+            return
+
+    lines = ["🏆 TOP 20 COIN VOLUME CAO (ONUS)\n"]
+    for i, c in enumerate(_TOP, 1):
+        price = f"{int(c['price']):,}₫" if c["price"] else "-"
+        vol = _fmt_billion(c["vol"])
+        arrow = "🟢" if c["change"] >= 0 else "🔴"
+        lines.append(f"{i:>2}. {c['symbol']:<8} {price:<12} Vol:{vol:<6} {arrow} {c['change']:+.2f}%")
+    await update.message.reply_text("\n".join(lines))
 
 def register_top_handler(app):
-    app.add_handler(CommandHandler("top", top_command))
+    app.add_handler(CommandHandler("top", cmd_top))
 
 def start_top_updater():
-    """Cập nhật dữ liệu coin mỗi 60 giây"""
-    async def updater():
-        while True:
-            async with _lock:
-                await fetch_top_coins()
-            await asyncio.sleep(60)
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(updater())
+    asyncio.get_event_loop().create_task(updater_loop())
