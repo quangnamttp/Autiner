@@ -123,24 +123,44 @@ def build_pc_headers(u: str) -> dict:
 
 @app.get("/relay/onus")
 async def relay_onus():
-    """Proxy ONUS: giả lập Windows + Chrome; chuẩn hoá JSON trả về mảng."""
-    async with httpx.AsyncClient(timeout=12, follow_redirects=True, http2=True) as client:
-        for u in ONUS_UPSTREAMS:
-            try:
-                r = await client.get(u, headers=build_pc_headers(u))
-                if r.status_code == 200:
-                    try:
-                        data = r.json()
-                    except Exception:
-                        continue
-                    arr = data if isinstance(data, list) else data.get("data", data)
-                    if isinstance(arr, list):
-                        return JSONResponse(arr, media_type="application/json")
-                    return JSONResponse(data, media_type="application/json")
-            except Exception:
-                pass
+    import traceback
+    trials = []  # log thử từng upstream
+
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True, http2=True) as client:
+            for u in ONUS_UPSTREAMS:
+                try:
+                    r = await client.get(u, headers=build_pc_headers(u))
+                    trials.append({
+                        "url": u,
+                        "status": r.status_code,
+                        "preview": (r.text or "")[:200],
+                    })
+                    if r.status_code == 200:
+                        try:
+                            data = r.json()
+                        except Exception as je:
+                            trials.append({"url": u, "json_error": str(je)})
+                            continue
+                        arr = data if isinstance(data, list) else data.get("data", data)
+                        if isinstance(arr, list):
+                            return JSONResponse(arr, media_type="application/json")
+                        return JSONResponse(data, media_type="application/json")
+                except Exception as e:
+                    trials.append({"url": u, "exception": str(e)})
+                    continue
+    except Exception as e:
+        tb = traceback.format_exc()
+        print("[RELAY_FATAL]", tb)
+        return JSONResponse(
+            {"ok": False, "error": "relay fatal", "detail": str(e), "trace": tb},
+            status_code=500,
+        )
+
+    # không endpoint nào thành công
     return JSONResponse(
-        {"ok": False, "error": "ONUS upstream unreachable"}, status_code=502
+        {"ok": False, "error": "ONUS upstream unreachable", "trials": trials},
+        status_code=502,
     )
 
 
