@@ -20,8 +20,8 @@ def build_app():
     # Lệnh cơ bản
     app.add_handler(CommandHandler("start", start))
 
-    # Đăng ký lệnh /top
+    # Lệnh /top
     top.register_top_handler(app)
-    top.start_top_updater()  # chạy auto update dữ liệu Onus
+    top.start_top_updater()  # Cập nhật dữ liệu coin liên tục
 
     return app
