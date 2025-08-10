@@ -1,21 +1,16 @@
 import asyncio
 from telegram import Message
-from common.time_utils import seconds_until
-from common.time_utils import now_vn
 
 def progress_bar(percent: float, width=20) -> str:
     filled = int(round(percent * width))
     return "█" * filled + "░" * (width - filled)
 
 async def countdown_edit(msg: Message, seconds: int):
+    """Đếm ngược từng giây trước khi gửi tín hiệu."""
     total = max(1, seconds)
-    # Cập nhật mỗi 5s, 5s cuối mỗi 1s
-    step = 5
     remain = total
     try:
         while remain > 0:
-            if remain <= 5:
-                step = 1
             pct = (total - remain) / total
             bar = progress_bar(pct)
             mm = remain // 60
@@ -26,8 +21,7 @@ async def countdown_edit(msg: Message, seconds: int):
                 f"Đếm ngược: {mm:02d}:{ss:02d}\n{bar} {int(pct*100)}%"
             )
             await msg.edit_text(text)
-            await asyncio.sleep(step)
-            remain -= step
+            await asyncio.sleep(1)  # Cập nhật mỗi 1 giây
+            remain -= 1
     except Exception:
-        # Nếu lỗi edit (rate limit, mạng...), bỏ qua để không cản trở việc gửi tín hiệu
         pass
