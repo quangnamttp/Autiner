@@ -48,11 +48,17 @@ def _polling_thread():
 @app.on_event("startup")
 async def startup():
     global _app, _poll_thread
-    _app = build_app()                          # Application đã gắn scheduler countdown trong build_app
+    _app = build_app()
+
+    # Xóa webhook để polling nhận tin nhắn
+    await _app.bot.delete_webhook(drop_pending_updates=True)
+
     _poll_thread = threading.Thread(target=_polling_thread, daemon=True)
     _poll_thread.start()
+
     # Keep-awake (tùy chọn): đặt SELF_URL=https://<tên-app>.onrender.com/
     asyncio.create_task(keep_awake())
+
     print("[STARTUP] Bot polling + keep-awake đã chạy.")
 
 
