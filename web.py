@@ -131,7 +131,7 @@ async def relay_onus():
     trials = []  # thu thập thông tin từng upstream để chẩn đoán
 
     try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True, http2=True) as client:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
             for u in ONUS_UPSTREAMS:
                 try:
                     r = await client.get(u, headers=build_pc_headers(u))
