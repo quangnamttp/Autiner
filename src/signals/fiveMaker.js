@@ -1,73 +1,60 @@
 // src/signals/fiveMaker.js
-// Đảm bảo luôn đủ 5 tín hiệu ONUS, không báo lỗi, không chéo sàn.
-// Chiến lược:
-// 1) Lấy snapshot tươi (cache).
-// 2) Nếu <5, ép scraper chạy ngay 2–3 lần để tạo snapshot mới và lưu DB.
-// 3) Nếu vẫn <5, gom từ kho 6h (mở rộng tối đa 24h nếu cần) cho đủ 5.
+// Tạo ĐÚNG 5 tín hiệu ONUS. Nếu không đủ 5 → trả null (để batch/test không gửi gì).
 
 import { getOnusSnapshotCached } from '../sources/onus/cache.js';
 import { getOnusRowsFromHistory, saveOnusSnapshot } from '../storage/onusRepo.js';
-import { pickSignals } from './generator.js';
 import { getOnusSnapshot } from '../sources/onus/scrape.js';
+import { pickSignals } from './generator.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function forceWarmUp(attempts = 2) {
-  for (let i = 0; i < attempts; i++) {
+async function warmUp(times = 2) {
+  for (let i = 0; i < times; i++) {
     try {
-      const rows = await getOnusSnapshot();           // ép scraper (có puppeteer fallback)
-      await saveOnusSnapshot(rows, Date.now());       // lưu kho
-    } catch (_e) {
-      // bỏ qua, thử lần sau
+      const rows = await getOnusSnapshot();          // axios → fallback puppeteer
+      await saveOnusSnapshot(rows, Date.now());
+    } catch (_) {}
+    await sleep(400);
+  }
+}
+
+// luôn trả mảng dài đúng 5; nếu không thể → trả null
+export async function makeExactlyFiveOnusSignals() {
+  // vòng cố gắng tối đa ~90s
+  for (let round = 0; round < 6; round++) {
+    // 1) chộp snapshot tươi
+    let fresh = await getOnusSnapshotCached({ maxAgeSec: 120, quickRetries: 3 });
+    let sigs = pickSignals(fresh, 5, 'VND');
+
+    // 2) nếu thiếu → dùng kho 6h/24h để bù cho đủ 5 (vẫn dữ liệu ONUS)
+    if (sigs.length < 5) {
+      const used = new Set(sigs.map(s => s.symbol));
+      const pool6h = await getOnusRowsFromHistory(360);
+      const extra6 = pickSignals(pool6h.filter(r => !used.has(r.symbol)), 5 - sigs.length, 'VND');
+      sigs = sigs.concat(extra6);
     }
-    await sleep(500);
+    if (sigs.length < 5) {
+      const used = new Set(sigs.map(s => s.symbol));
+      const pool24h = await getOnusRowsFromHistory(1440);
+      const extra24 = pickSignals(pool24h.filter(r => !used.has(r.symbol)), 5 - sigs.length, 'VND');
+      sigs = sigs.concat(extra24);
+    }
+
+    if (sigs.length >= 5) return sigs.slice(0, 5);
+
+    // 3) nếu vẫn thiếu → ép lấy thêm dữ liệu rồi lặp lại
+    await warmUp(round < 2 ? 2 : 1);
   }
+  return null; // chấp nhận không gửi batch thay vì báo lỗi
 }
 
-function uniqBySymbol(arr) {
-  const out = [];
-  const seen = new Set();
-  for (const x of arr) {
-    const k = (x.symbol || '').trim();
-    if (!k || seen.has(k)) continue;
-    seen.add(k);
-    out.push(x);
-  }
-  return out;
-}
-
-export async function makeFiveOnusSignals() {
-  // 1) lấy snapshot tươi (cache)
-  let fresh = await getOnusSnapshotCached({ maxAgeSec: 120, quickRetries: 3 });
-  let signals = pickSignals(fresh, 5, 'VND');
-
-  if (signals.length >= 5) return signals;
-
-  // 2) ép warm-up 2 lần để chắc có dữ liệu
-  await forceWarmUp(2);
-  fresh = await getOnusSnapshotCached({ maxAgeSec: 120, quickRetries: 3 });
-  signals = pickSignals(fresh, 5, 'VND');
-  if (signals.length >= 5) return signals;
-
-  // 3) bổ sung từ kho 6h gần nhất
-  let poolRows = await getOnusRowsFromHistory(360);
-  if (poolRows.length) {
-    // tránh trùng symbol
-    const used = new Set(signals.map(s => s.symbol));
-    const extraRows = poolRows.filter(r => !used.has(r.symbol));
-    const extra = pickSignals(extraRows, 5 - signals.length, 'VND');
-    signals = uniqBySymbol([...signals, ...extra]);
-    if (signals.length >= 5) return signals;
-  }
-
-  // 4) lần cuối: ép warm-up thêm 1 lần + mở rộng kho 24h
-  await forceWarmUp(1);
-  poolRows = await getOnusRowsFromHistory(1440);
-  if (poolRows.length) {
-    const extraFinal = pickSignals(poolRows, 5 - signals.length, 'VND');
-    signals = uniqBySymbol([...signals, ...extraFinal]);
-  }
-
-  // Trả đúng 5 (nếu vẫn thiếu, trả theo số có — nhưng sau bước warm-up thường sẽ đủ)
-  return signals.slice(0, 5);
+// Dùng cho 06:00 chào sáng (Top 5 tăng từ dữ liệu ONUS thật)
+export async function getOnusTop5GainersForMorning() {
+  const rows = await getOnusRowsFromHistory(120); // 2h gần nhất
+  if (!rows.length) return [];
+  return [...rows]
+    .filter(r => Number.isFinite(Number(r.change)))
+    .sort((a, b) => Number(b.change) - Number(a.change))
+    .slice(0, 5)
+    .map(r => r.symbol);
 }
