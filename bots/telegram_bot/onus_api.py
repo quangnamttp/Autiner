@@ -1,21 +1,45 @@
+import os
 import time
 import requests
-from settings import ONUS_TIMEOUT, ONUS_RETRY, ONUS_CACHE_TTL, ONUS_MIN_REFRESH_SEC, ONUS_PROXY, PUBLIC_URL
+from settings import (
+    ONUS_TIMEOUT, ONUS_RETRY, ONUS_CACHE_TTL, ONUS_MIN_REFRESH_SEC, ONUS_PROXY, PUBLIC_URL
+)
 
-# ƯU TIÊN gọi qua Google Apps Script trước
-ENDPOINTS = [
-    f"{PUBLIC_URL}/relay/onus",
+# Optional: mirror thêm qua ENV nếu muốn
+ONUS_MIRROR = os.getenv("ONUS_MIRROR", "").rstrip("/")
+
+# ƯU TIÊN: Render relay (nếu PUBLIC_URL có) → mirror (nếu có) → ONUS trực tiếp
+ENDPOINTS = []
+if PUBLIC_URL:
+    ENDPOINTS.append(f"{PUBLIC_URL}/relay/onus")
+if ONUS_MIRROR:
+    ENDPOINTS.append(ONUS_MIRROR)
+ENDPOINTS += [
     "https://goonus.io/api/v1/futures/market-overview",
     "https://api-gateway.onus.io/futures/api/v1/market/overview",
     "https://api.onus.io/futures/api/v1/market/overview",
 ]
 
+# PC-only headers (Windows + Chrome) — KHÔNG dùng header mobile
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/124 Safari/537.36",
+    "Host": "goonus.io",
+    "Connection": "keep-alive",
+    "sec-ch-ua": '"Not/A)Brand";v="99", "Google Chrome";v="124", "Chromium";v="124"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Upgrade-Insecure-Requests": "1",
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/124.0.0.0 Safari/537.36"),
     "Accept": "application/json, text/plain, */*",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
     "Referer": "https://goonus.io/future",
     "Origin": "https://goonus.io",
-    "Connection": "keep-alive",
+    "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Pragma": "no-cache",
+    "Cache-Control": "no-cache",
 }
 
 _cache = {"ts": 0.0, "data": [], "live": False}
@@ -29,8 +53,10 @@ def _norm(item: dict) -> dict | None:
         return None
 
     def f(v, d=0.0):
-        try: return float(v)
-        except: return d
+        try:
+            return float(v)
+        except:
+            return d
 
     price   = f(item.get("lastPriceVnd") or item.get("priceVnd") or item.get("lastPrice") or item.get("last"))
     vol_vnd = f(item.get("volumeValueVnd") or item.get("quoteVolumeVnd") or item.get("quoteVolume") or item.get("volume"))
@@ -58,8 +84,10 @@ def _try_get(url: str):
 
 def fetch_onus_futures_top30() -> list[dict]:
     now = time.time()
+    # dùng cache nếu còn tươi
     if _cache["data"] and now - _cache["ts"] < ONUS_CACHE_TTL:
         return _cache["data"]
+    # tránh refresh quá dày
     if _cache["data"] and now - _cache["ts"] < ONUS_MIN_REFRESH_SEC:
         return _cache["data"]
 
@@ -73,9 +101,9 @@ def fetch_onus_futures_top30() -> list[dict]:
 
         out = []
         for it in data:
-            norm = _norm(it)
-            if norm:
-                out.append(norm)
+            n = _norm(it)
+            if n:
+                out.append(n)
         if not out:
             continue
 
@@ -87,6 +115,7 @@ def fetch_onus_futures_top30() -> list[dict]:
         _cache["live"] = True
         return top30
 
+    # fallback cache cũ
     _cache["live"] = False
     return _cache["data"]
 
