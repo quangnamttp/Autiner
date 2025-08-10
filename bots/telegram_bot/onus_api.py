@@ -1,130 +1,93 @@
 import time
 import requests
 
-# Thứ tự ưu tiên các endpoint ONUS (họ hay đổi gateway)
+# Các endpoint ONUS (thử lần lượt)
 ENDPOINTS = [
     "https://goonus.io/api/v1/futures/market-overview",
     "https://api-gateway.onus.io/futures/api/v1/market/overview",
     "https://api.onus.io/futures/api/v1/market/overview",
 ]
 
-# Cache 60 giây để tránh gọi dồn dập
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://goonus.io/future",
+    "Origin": "https://goonus.io",
+    "Connection": "keep-alive",
+}
+
 _cache = {"ts": 0.0, "data": []}
-_CACHE_TTL = 60
+TTL = 60
 
 
-def _normalize_item(x: dict) -> dict | None:
-    """Chuẩn hóa 1 dòng dữ liệu futures từ ONUS về cùng format dùng trong bot."""
-    # Chỉ lấy hợp đồng vĩnh cửu (perpetual)
-    ctype = (x.get("contractType") or x.get("type") or "").lower()
+def _norm(item: dict) -> dict | None:
+    ctype = (item.get("contractType") or item.get("type") or "").lower()
+    # chỉ lấy perpetual
     if ctype and "perpetual" not in ctype:
         return None
 
-    symbol = x.get("symbol") or x.get("pair") or x.get("token") or ""
-    if not symbol:
+    sym = item.get("symbol") or item.get("pair") or item.get("token")
+    if not sym:
         return None
 
-    # Giá VND (nhiều tên field khác nhau)
-    price = (
-        x.get("lastPriceVnd")
-        or x.get("priceVnd")
-        or x.get("lastPrice")
-        or x.get("last")
-        or 0
-    )
+    def f(v, default=0.0):
+        try:
+            return float(v)
+        except Exception:
+            return default
 
-    # Volume VND 24h (ưu tiên field theo VND)
-    vol_vnd = (
-        x.get("volumeValueVnd")
-        or x.get("quoteVolumeVnd")
-        or x.get("quoteVolume")  # đôi lúc đã là VND
-        or x.get("volume")
-        or 0
-    )
-
-    # % thay đổi 24h nếu có
-    change_pct = (
-        x.get("priceChangePercent")
-        or x.get("changePercent")
-        or x.get("percentChange")
-        or 0
-    )
-
-    # Funding hiện tại nếu có
-    funding = (
-        x.get("fundingRate")
-        or x.get("currentFundingRate")
-        or x.get("funding")
-        or 0
-    )
-
-    try:
-        price = float(price)
-    except Exception:
-        price = 0.0
-    try:
-        vol_vnd = float(vol_vnd)
-    except Exception:
-        vol_vnd = 0.0
-    try:
-        change_pct = float(change_pct)
-    except Exception:
-        change_pct = 0.0
-    try:
-        funding = float(funding)
-    except Exception:
-        funding = 0.0
+    price = f(item.get("lastPriceVnd") or item.get("priceVnd") or item.get("lastPrice") or item.get("last"))
+    vol_vnd = f(item.get("volumeValueVnd") or item.get("quoteVolumeVnd") or item.get("quoteVolume") or item.get("volume"))
+    change = f(item.get("priceChangePercent") or item.get("changePercent") or item.get("percentChange"))
+    funding = f(item.get("fundingRate") or item.get("currentFundingRate") or item.get("funding"))
 
     return {
-        "symbol": symbol,
-        "lastPrice": price,            # VND (nếu nguồn đã quy đổi) hoặc giá trị số gần nhất
-        "volumeValueVnd": vol_vnd,     # Volume quy về VND (ưu tiên)
-        "change24h_pct": change_pct,   # %
-        "fundingRate": funding,        # %
+        "symbol": sym,
+        "lastPrice": price,
+        "volumeValueVnd": vol_vnd,
+        "change24h_pct": change,
+        "fundingRate": funding,
         "contractType": "perpetual",
     }
 
 
 def fetch_onus_futures_top30() -> list[dict]:
-    """
-    Lấy Top 30 hợp đồng futures ONUS theo volume VND 24h.
-    Trả về danh sách dict đã chuẩn hóa:
-      [{symbol, lastPrice, volumeValueVnd, change24h_pct, fundingRate, contractType}]
-    """
     now = time.time()
-    if _cache["data"] and now - _cache["ts"] < _CACHE_TTL:
+    if _cache["data"] and now - _cache["ts"] < TTL:
         return _cache["data"]
 
     for url in ENDPOINTS:
-        try:
-            r = requests.get(url, timeout=8)
-            r.raise_for_status()
-            raw = r.json()
-            data = raw.get("data") if isinstance(raw, dict) else raw
-            if not isinstance(data, list):
+        for attempt in range(2):  # retry nhẹ
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=8)
+                if r.status_code != 200:
+                    continue
+                raw = r.json()
+                data = raw.get("data") if isinstance(raw, dict) else raw
+                if not isinstance(data, list):
+                    continue
+
+                out = []
+                for it in data:
+                    norm = _norm(it)
+                    if norm:
+                        out.append(norm)
+
+                if not out:
+                    continue
+
+                # sort theo vol VND
+                out.sort(key=lambda d: d.get("volumeValueVnd", 0.0), reverse=True)
+                top30 = out[:30]
+
+                _cache["ts"] = now
+                _cache["data"] = top30
+                return top30
+            except Exception:
                 continue
 
-            out = []
-            for item in data:
-                norm = _normalize_item(item)
-                if norm:
-                    out.append(norm)
-
-            if not out:
-                continue
-
-            # Sắp xếp theo volume giảm dần, lấy Top 30
-            out.sort(key=lambda d: d.get("volumeValueVnd", 0.0), reverse=True)
-            top30 = out[:30]
-
-            # Lưu cache và trả về
-            _cache["ts"] = now
-            _cache["data"] = top30
-            return top30
-
-        except Exception:
-            # thử endpoint tiếp theo
-            continue
-
-    # Nếu tất cả endpoint lỗi, trả cache cũ (nếu có), nếu không có thì list rỗng
-    return _cache["data"]
+    return _cache["data"]  # có thể rỗng nếu bị chặn hoàn toàn
