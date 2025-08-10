@@ -1,34 +1,69 @@
-# web.py — dùng cho Render (Start Command: uvicorn web:app --host 0.0.0.0 --port $PORT)
+# web.py — Render Web Service + FastAPI + Telegram polling (thread riêng)
+# Start Command: uvicorn web:app --host 0.0.0.0 --port $PORT
+
+import os
+import threading
 import asyncio
+import aiohttp
 from fastapi import FastAPI
 from bots.telegram_bot import build_app
 
 app = FastAPI()
 
-telegram_app = None
-_poll_task: asyncio.Task | None = None
+_app = None                 # python-telegram-bot Application
+_poll_thread = None         # Thread chạy polling riêng
+
+
+async def keep_awake():
+    """Tự ping chính URL để Render không ngủ. Đặt SELF_URL trong ENV, nếu không có sẽ bỏ qua."""
+    url = os.getenv("SELF_URL")
+    if not url:
+        print("[KEEP_AWAKE] Bỏ qua (không có SELF_URL).")
+        return
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(url) as resp:
+                    print(f"[KEEP_AWAKE] Ping {url} -> {resp.status}")
+            except Exception as e:
+                print(f"[KEEP_AWAKE] Lỗi ping {url}: {e}")
+            await asyncio.sleep(300)  # 5 phút
+
+
+def _polling_thread():
+    """Chạy run_polling trong event loop riêng tránh xung đột với Uvicorn."""
+    global _app
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def runner():
+        await _app.run_polling(close_loop=False)
+
+    try:
+        loop.run_until_complete(runner())
+    finally:
+        loop.close()
+
 
 @app.on_event("startup")
 async def startup():
-    global telegram_app, _poll_task
-    telegram_app = build_app()
-    await telegram_app.initialize()
-    await telegram_app.start()  # KHÔNG dùng run_polling ở đây
-    _poll_task = asyncio.create_task(telegram_app.updater.start_polling())  # chạy trong loop hiện tại
+    global _app, _poll_thread
+    _app = build_app()                          # Application đã gắn scheduler countdown trong build_app
+    _poll_thread = threading.Thread(target=_polling_thread, daemon=True)
+    _poll_thread.start()
+    # Keep-awake (tùy chọn): đặt SELF_URL=https://<tên-app>.onrender.com/
+    asyncio.create_task(keep_awake())
+    print("[STARTUP] Bot polling + keep-awake đã chạy.")
+
 
 @app.on_event("shutdown")
 async def shutdown():
-    global telegram_app, _poll_task
-    if _poll_task and not _poll_task.done():
-        await telegram_app.updater.stop()
-        _poll_task.cancel()
-        try:
-            await _poll_task
-        except asyncio.CancelledError:
-            pass
-    if telegram_app:
-        await telegram_app.stop()
-        await telegram_app.shutdown()
+    global _app
+    if _app:
+        await _app.stop()
+        await _app.shutdown()
+    print("[SHUTDOWN] Bot đã dừng.")
+
 
 @app.get("/")
 async def root():
