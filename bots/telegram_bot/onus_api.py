@@ -3,6 +3,7 @@ import requests
 from settings import ONUS_TIMEOUT, ONUS_RETRY, ONUS_CACHE_TTL, ONUS_MIN_REFRESH_SEC, ONUS_PROXY
 
 ENDPOINTS = [
+    "https://onus-relay.quangnamttp.workers.dev/overview",
     "https://goonus.io/api/v1/futures/market-overview",
     "https://api-gateway.onus.io/futures/api/v1/market/overview",
     "https://api.onus.io/futures/api/v1/market/overview",
