@@ -152,12 +152,9 @@ async def root():
 
 @app.post("/webhook/{secret}")
 async def tg_webhook(secret: str, request: Request):
-    if secret != WEBHOOK_SECRET:
-        raise HTTPException(status_code=401, detail="Invalid webhook secret")
     header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-    if header != WEBHOOK_SECRET:
-        raise HTTPException(status_code=401, detail="Invalid secret token header")
-
+    if secret != WEBHOOK_SECRET or header != WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid secret")
     data = await request.json()
     update = Update.de_json(data, _app.bot)
     await _app.process_update(update)
