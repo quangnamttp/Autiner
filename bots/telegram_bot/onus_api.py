@@ -2,8 +2,9 @@ import time
 import requests
 from settings import ONUS_TIMEOUT, ONUS_RETRY, ONUS_CACHE_TTL, ONUS_MIN_REFRESH_SEC, ONUS_PROXY
 
+# ƯU TIÊN gọi qua Google Apps Script trước
 ENDPOINTS = [
-    "https://onus-relay.quangnamttp.workers.dev/overview",
+    "https://script.google.com/macros/s/AKfycbzweWTvvLg81J-crJyIo5znsLtBJyiY_K51l4gdwmCGbDmMOTiINQAAoGBOFbkejVyP/exec",
     "https://goonus.io/api/v1/futures/market-overview",
     "https://api-gateway.onus.io/futures/api/v1/market/overview",
     "https://api.onus.io/futures/api/v1/market/overview",
@@ -57,11 +58,8 @@ def _try_get(url: str):
 
 def fetch_onus_futures_top30() -> list[dict]:
     now = time.time()
-    # dùng cache nếu còn tươi
     if _cache["data"] and now - _cache["ts"] < ONUS_CACHE_TTL:
         return _cache["data"]
-
-    # đảm bảo không refresh quá dày
     if _cache["data"] and now - _cache["ts"] < ONUS_MIN_REFRESH_SEC:
         return _cache["data"]
 
@@ -89,7 +87,6 @@ def fetch_onus_futures_top30() -> list[dict]:
         _cache["live"] = True
         return top30
 
-    # không lấy được → dùng cache cũ (đánh dấu live=False)
     _cache["live"] = False
     return _cache["data"]
 
