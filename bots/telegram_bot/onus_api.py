@@ -1,10 +1,10 @@
 import time
 import requests
-from settings import ONUS_TIMEOUT, ONUS_RETRY, ONUS_CACHE_TTL, ONUS_MIN_REFRESH_SEC, ONUS_PROXY
+from settings import ONUS_TIMEOUT, ONUS_RETRY, ONUS_CACHE_TTL, ONUS_MIN_REFRESH_SEC, ONUS_PROXY, PUBLIC_URL
 
 # ƯU TIÊN gọi qua Google Apps Script trước
 ENDPOINTS = [
-    "https://script.google.com/macros/s/AKfycbzweWTvvLg81J-crJyIo5znsLtBJyiY_K51l4gdwmCGbDmMOTiINQAAoGBOFbkejVyP/exec",
+    f"{PUBLIC_URL}/relay/onus",
     "https://goonus.io/api/v1/futures/market-overview",
     "https://api-gateway.onus.io/futures/api/v1/market/overview",
     "https://api.onus.io/futures/api/v1/market/overview",
