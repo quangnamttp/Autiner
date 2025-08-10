@@ -1,59 +1,22 @@
-import axios from 'axios';
-import { logger } from '../utils/logger.js';
+// src/telegram/bot.js
+import TelegramBot from 'node-telegram-bot-api';
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const api = axios.create({
-  baseURL: `https://api.telegram.org/bot${BOT_TOKEN}/`,
-  timeout: 10000
-});
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const CHAT_ID = process.env.ALLOWED_TELEGRAM_USER_ID;
 
-export async function setWebhook(url) {
+if (!TOKEN) throw new Error('⚠️ TELEGRAM_BOT_TOKEN chưa được cấu hình!');
+if (!CHAT_ID) throw new Error('⚠️ ALLOWED_TELEGRAM_USER_ID chưa được cấu hình!');
+
+export const bot = new TelegramBot(TOKEN, { polling: false });
+
+export async function sendMessage(chatId, text) {
   try {
-    const { data } = await api.post('setWebhook', {
-      url,
-      drop_pending_updates: true,
-      allowed_updates: ['message','callback_query']
-    });
-    logger.info('setWebhook', data);
-    return data;
+    await bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
   } catch (err) {
-    logger.error('setWebhook', err?.response?.data || err.message);
+    console.error('[ERROR] sendMessage:', err);
   }
 }
 
-export async function sendMessage(chat_id, text, opts = {}) {
-  try {
-    // ÉP parse_mode = HTML kể cả nếu opts có parse_mode khác
-    const payload = {
-      chat_id,
-      text,
-      ...opts,
-      parse_mode: 'HTML',
-      disable_web_page_preview: true
-    };
-    const { data } = await api.post('sendMessage', payload);
-    return data;
-  } catch (err) {
-    logger.error('sendMessage', err?.response?.data || err.message);
-  }
-}
-
-export async function answerCallbackQuery(callback_query_id) {
-  try {
-    await api.post('answerCallbackQuery', { callback_query_id });
-  } catch (err) {
-    logger.error('answerCallbackQuery', err?.response?.data || err.message);
-  }
-}
-
-export async function handleUpdate(update) {
-  try {
-    const hasMsg = update.message || update.callback_query;
-    if (hasMsg) {
-      const { handleMessageOrCallback } = await import('./handler.js');
-      await handleMessageOrCallback(update);
-    }
-  } catch (err) {
-    logger.error('handleUpdate', err);
-  }
+export function sendToOwner(text) {
+  return sendMessage(CHAT_ID, text);
 }
