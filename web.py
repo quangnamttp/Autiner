@@ -1,37 +1,31 @@
-# web.py — chạy trên Render (Web Service) với FastAPI + uvicorn
-# Start Command trên Render:
-# uvicorn web:app --host 0.0.0.0 --port $PORT
-
+# web.py — dùng cho Render (Start Command: uvicorn web:app --host 0.0.0.0 --port $PORT)
 import asyncio
 from fastapi import FastAPI
 from bots.telegram_bot import build_app
 
 app = FastAPI()
 
-telegram_app = None          # python-telegram-bot Application
-_polling_task: asyncio.Task | None = None  # task chạy polling
+telegram_app = None
+_poll_task: asyncio.Task | None = None
 
 @app.on_event("startup")
 async def startup():
-    global telegram_app, _polling_task
-    telegram_app = build_app()                 # tạo Application (đã gắn scheduler nền)
-    await telegram_app.initialize()            # init handlers, etc.
-    # chạy polling trong background để nhận /start, /demo...
-    _polling_task = asyncio.create_task(
-        telegram_app.run_polling(close_loop=False)
-    )
+    global telegram_app, _poll_task
+    telegram_app = build_app()
+    await telegram_app.initialize()
+    await telegram_app.start()  # KHÔNG dùng run_polling ở đây
+    _poll_task = asyncio.create_task(telegram_app.updater.start_polling())  # chạy trong loop hiện tại
 
 @app.on_event("shutdown")
 async def shutdown():
-    global telegram_app, _polling_task
-    # dừng polling trước
-    if _polling_task and not _polling_task.done():
-        _polling_task.cancel()
+    global telegram_app, _poll_task
+    if _poll_task and not _poll_task.done():
+        await telegram_app.updater.stop()
+        _poll_task.cancel()
         try:
-            await _polling_task
+            await _poll_task
         except asyncio.CancelledError:
             pass
-    # stop & shutdown Application
     if telegram_app:
         await telegram_app.stop()
         await telegram_app.shutdown()
