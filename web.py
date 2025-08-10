@@ -3,6 +3,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import aiohttp
 import httpx
@@ -83,9 +84,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# ---------------------- RELAY ONUS (desktop headers) ----------------------
-from urllib.parse import urlparse
-
+# ---------------------- RELAY ONUS (desktop headers + debug) ----------------------
 ONUS_UPSTREAMS = [
     "https://goonus.io/api/v1/futures/market-overview",
     "https://api-gateway.onus.io/futures/api/v1/market/overview",
@@ -94,6 +93,7 @@ ONUS_UPSTREAMS = [
 
 
 def build_pc_headers(u: str) -> dict:
+    """Giả lập Windows + Chrome; header bám theo host của từng endpoint."""
     host = urlparse(u).hostname or "goonus.io"
     origin = f"https://{host}"
     referer = "https://goonus.io/future" if host == "goonus.io" else origin
@@ -123,8 +123,12 @@ def build_pc_headers(u: str) -> dict:
 
 @app.get("/relay/onus")
 async def relay_onus():
+    """
+    Proxy ONUS (header PC). Không văng 500: luôn trả JSON kết quả hoặc JSON debug `trials`.
+    """
     import traceback
-    trials = []  # log thử từng upstream
+
+    trials = []  # thu thập thông tin từng upstream để chẩn đoán
 
     try:
         async with httpx.AsyncClient(timeout=12, follow_redirects=True, http2=True) as client:
@@ -149,6 +153,7 @@ async def relay_onus():
                 except Exception as e:
                     trials.append({"url": u, "exception": str(e)})
                     continue
+
     except Exception as e:
         tb = traceback.format_exc()
         print("[RELAY_FATAL]", tb)
@@ -157,7 +162,7 @@ async def relay_onus():
             status_code=500,
         )
 
-    # không endpoint nào thành công
+    # Không upstream nào thành công → trả debug để biết nguyên nhân
     return JSONResponse(
         {"ok": False, "error": "ONUS upstream unreachable", "trials": trials},
         status_code=502,
