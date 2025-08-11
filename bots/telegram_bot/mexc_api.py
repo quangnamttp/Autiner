@@ -1,3 +1,4 @@
+# bots/telegram_bot/mexc_api.py
 import time
 import math
 import random
@@ -25,13 +26,29 @@ _last_batch: set[str] = set()           # symbols picked last batch
 # ===== Auto denomination (giống ONUS) =====
 from .denom import auto_denom
 
+# ===== SAFE DEFAULTS nếu settings.py thiếu các núm chỉnh =====
+try:
+    from settings import (
+        DIVERSITY_POOL_TOPN,   # xét pool theo thanh khoản
+        VOL_FLOOR_USDT_SMART,  # ngưỡng VolumeQuote (USDT) tối thiểu để xét
+        MIN_ABS_R30_PCT,       # yêu cầu |r30| tối thiểu (% so với slot trước)
+        SAME_PRICE_EPS,        # coi như đứng im nếu thay đổi nhỏ hơn eps
+        REPEAT_BONUS_DELTA,    # nếu lặp mã cũ, yêu cầu score vượt median + delta
+    )
+except Exception:
+    DIVERSITY_POOL_TOPN = 40
+    VOL_FLOOR_USDT_SMART = 150_000
+    MIN_ABS_R30_PCT = 0.25
+    SAME_PRICE_EPS = 0.0005
+    REPEAT_BONUS_DELTA = 0.40
+
 # ====== Formatter ======
 def fmt_price_vnd(p: float) -> str:
     """
     VND giống ONUS:
-      - >= 100_000        : 0 chữ số thập phân
-      - >= 1_000 < 100_000: 2 chữ số thập phân
-      - < 1_000           : 4 chữ số thập phân
+      - >= 100_000        : 0 chữ số thập phân (2,345,678)
+      - >= 1_000 < 100_000: 2 chữ số thập phân (12,345.67)
+      - < 1_000           : 4 chữ số thập phân (296.6256)
     """
     p = float(p or 0.0)
     if p >= 100_000:
@@ -90,7 +107,7 @@ def _fetch_tickers_live() -> List[dict]:
     tick = _get_json(MEXC_TICKER_URL)
     items = []
     if isinstance(tick, dict) and (tick.get("success") or "data" in tick):
-        arr = tick.get("data") or tick.get("data", [])
+        arr = tick.get("data") or []
     elif isinstance(tick, list):
         arr = tick
     else:
@@ -110,7 +127,7 @@ def _fetch_tickers_live() -> List[dict]:
         try:
             raw = it.get("riseFallRate") or it.get("changeRate") or it.get("percent") or 0
             chg = float(raw)
-            # một số api trả 0.0123 (tức 1.23%), chuẩn hoá:
+            # một số api trả 0.0123 (1.23%), chuẩn hoá:
             if abs(chg) < 1.0: chg *= 100.0
         except:
             chg = 0.0
@@ -178,21 +195,7 @@ def market_snapshot(unit: str = "VND", topn: int = 40) -> Tuple[List[dict], bool
         out.append(d)
     return out, True, rate
 
-# ====== Thuật toán chọn tín hiệu linh hoạt ======
-# Núm chỉnh (mặc định nếu settings không có)
-try:
-    from settings import (
-        DIVERSITY_POOL_TOPN,   # đã import ở trên (giữ)
-        VOL_FLOOR_USDT_SMART,  # ngưỡng volume tối thiểu để xét (USDT)
-        MIN_ABS_R30_PCT,       # tối thiểu r30 (ước lượng theo lịch sử slot)
-        SAME_PRICE_EPS,        # đứng im nếu đổi < eps
-        REPEAT_BONUS_DELTA,    # yêu cầu score vượt median để lặp
-    )
-except Exception:
-    VOL_FLOOR_USDT_SMART = 150_000
-    # MIN_ABS_R30_PCT (đã ở trên), SAME_PRICE_EPS (đã ở trên)
-    # REPEAT_BONUS_DELTA (đã ở trên)
-
+# ====== Thuật toán chọn tín hiệu linh hoạt =====
 def _softmax(xs):
     if not xs: return []
     m = max(xs)
@@ -251,7 +254,10 @@ def _side_from_momo_funding(r30: float, change24h: float, funding: float) -> str
     return "LONG" if change24h >= 0 else "SHORT"
 
 def smart_pick_signals(unit: str, n_scalp=5):
-    coins, live, rate = market_snapshot(unit="USD", topn=DIVERSITY_POOL_TOPN)  # làm nền theo USD để tính động lượng nhất quán
+    # QUAN TRỌNG: dùng global trước khi truy cập/ghi
+    global _last_batch, _prev_volume
+
+    coins, live, rate = market_snapshot(unit="USD", topn=DIVERSITY_POOL_TOPN)  # nền USD để tính động lượng nhất quán
     if not live or not coins:
         return [], [], live, rate
 
@@ -275,7 +281,7 @@ def smart_pick_signals(unit: str, n_scalp=5):
     keep = []
     for score, r30, r60, idx, c in pool:
         if c["symbol"] in _last_batch:
-            if score >= median + 0.40:       # REPEAT_BONUS_DELTA
+            if score >= median + REPEAT_BONUS_DELTA:
                 keep.append((score, r30, r60, idx, c))
         else:
             keep.append((score, r30, r60, idx, c))
@@ -305,7 +311,7 @@ def smart_pick_signals(unit: str, n_scalp=5):
 
     # Dựng tín hiệu theo đơn vị bạn chọn (VND hoặc USD)
     signals = []
-    highlights = []  # có thể dùng ngoài (tuỳ bạn)
+    highlights = []  # để dành tương lai nếu cần
     now_rate = usd_vnd_rate()
 
     for rank, (score, r30, r60, idx, c) in enumerate(picked):
@@ -316,7 +322,7 @@ def smart_pick_signals(unit: str, n_scalp=5):
         # Strength: dựa trên score + thứ tự trong picked
         strength = int(max(35, min(95, 65 + score*8 - rank*3)))
 
-        # Tên hiển thị & giá hiện tại
+        # Tên hiển thị & giá hiện tại (auto-denom để hợp mắt như ONUS)
         disp, adj_usd, mul = auto_denom(c["symbol"], c["lastPrice"], now_rate)
         if unit == "VND":
             px = adj_usd * now_rate
@@ -337,8 +343,9 @@ def smart_pick_signals(unit: str, n_scalp=5):
             unit_tag = "USD"
             volq = fmt_amount_int(c.get("volumeQuote", 0.0), "USDT")
 
-        token = disp  # tên sau auto-denom
-        reason = f"r30={r30:+.2f}%, accel={max(0.0, r30-0.5*r60):+.2f}%, funding={funding:+.3f}%, VolQ≈{volq}"
+        token = disp  # tên sau auto-denom (vd: PEPE1000, SHIB1000, PUMP, ...)
+        accel = max(0.0, r30 - 0.5*r60)
+        reason = f"r30={r30:+.2f}%, accel={accel:+.2f}%, funding={funding:+.3f}%, VolQ≈{volq}"
 
         signals.append({
             "token": token,
@@ -357,8 +364,7 @@ def smart_pick_signals(unit: str, n_scalp=5):
         dq = _hist_px.setdefault(c["symbol"], deque(maxlen=3))
         dq.append(float(adj_usd))
 
-    # lưu batch & prev volume
-    global _last_batch, _prev_volume
+    # lưu batch & prev volume cho vòng sau
     _last_batch = {c["symbol"] for (_,_,_,_,c) in picked}
     _prev_volume = {c["symbol"]: c.get("volumeQuote", 0.0) for c in coins}
 
