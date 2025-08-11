@@ -1,6 +1,6 @@
 import time
 import requests
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from settings import (
     MEXC_TICKER_URL, MEXC_FUNDING_URL,
     USDVND_URL, HTTP_TIMEOUT, HTTP_RETRY,
@@ -64,10 +64,10 @@ def _fetch_tickers_live() -> List[dict]:
             chg = 0.0
 
         items.append({
-            "symbol": sym,                 # BTC_USDT
-            "lastPrice": last,             # USDT
-            "volumeQuote": qvol,           # USDT
-            "change24h_pct": chg,          # %
+            "symbol": sym,
+            "lastPrice": last,
+            "volumeQuote": qvol,
+            "change24h_pct": chg,
         })
     return items
 
@@ -82,13 +82,10 @@ def _fetch_funding_live() -> Dict[str, float]:
             if s and str(s).endswith("_USDT"):
                 try: fr = float(it.get("fundingRate") or it.get("rate") or it.get("value") or 0)
                 except: fr = 0.0
-                fmap[s] = fr * 100.0  # %
+                fmap[s] = fr * 100.0
     return fmap
 
 def top_symbols(unit: str = "VND", topn: int = 30):
-    """
-    LIVE-ONLY: nếu không lấy được dữ liệu -> trả ([], False, rate)
-    """
     items = _fetch_tickers_live()
     if not items:
         return [], False, usd_vnd_rate()
@@ -112,12 +109,10 @@ def pick_scalping_signals(unit: str, n_scalp=5):
     if not live or not coins:
         return [], [], live, rate
 
-    # chọn top 12 làm pool, lấy các vị trí 0,2,4,6,8
     pool = coins[:12]
     idxs = [0, 2, 4, 6, 8]
     chosen = [pool[i] for i in idxs if i < len(pool)]
 
-    # highlight "khẩn" dựa funding & volume spike top10
     highlights = []
     global _prev_volume
     for c in coins[:10]:
@@ -159,7 +154,7 @@ def pick_scalping_signals(unit: str, n_scalp=5):
             tp_s  = fmt_vnd(tp) + "₫"
             sl_s  = fmt_vnd(sl) + "₫"
             unit_tag = "VND"
-            volq = f"{c['volumeValueVND']:,}₫".replace(",", ".")
+            volq = fmt_vnd(c['volumeValueVND']) + "₫"
         else:
             entry = f"{px:.4f} USDT".rstrip("0").rstrip(".")
             tp_s  = f"{tp:.4f} USDT".rstrip("0").rstrip(".")
