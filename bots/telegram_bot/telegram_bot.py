@@ -1,21 +1,67 @@
+# bots/telegram_bot/telegram_bot.py
+
+import os
+import json
 import asyncio
 import time
 import pytz
 from datetime import datetime, time as dt_time, timedelta
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.constants import ParseMode
-from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
-
-from settings import (
-    TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, TZ_NAME,
-    DEFAULT_UNIT, SLOT_TIMES, NUM_SCALPING,
-    FAIL_ALERT_COOLDOWN_SEC, HEALTH_POLL_SEC
+from telegram.ext import (
+    Application, ApplicationBuilder, CommandHandler,
+    ContextTypes, MessageHandler, filters
 )
+
+# ==== Settings & fallback ====
+try:
+    from settings import (
+        TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, TZ_NAME,
+        DEFAULT_UNIT, SLOT_TIMES, NUM_SCALPING,
+        FAIL_ALERT_COOLDOWN_SEC, HEALTH_POLL_SEC,
+        # optional
+        STATE_FILE, AUTO_ENABLED_DEFAULT,
+    )
+except Exception:
+    # Bắt buộc
+    from settings import TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, TZ_NAME, DEFAULT_UNIT, SLOT_TIMES, NUM_SCALPING
+    # Mặc định nếu thiếu
+    FAIL_ALERT_COOLDOWN_SEC = 600
+    HEALTH_POLL_SEC = 60
+    STATE_FILE = os.getenv("STATE_FILE", "state.json")
+    AUTO_ENABLED_DEFAULT = os.getenv("AUTO_ENABLED_DEFAULT", "true").lower() == "true"
 
 from .mexc_api import smart_pick_signals, market_snapshot
 
 VN_TZ = pytz.timezone(TZ_NAME)
-_current_unit = DEFAULT_UNIT  # "VND" hoặc "USD"
+
+# ====== Persistent state (nhớ đơn vị & ON/OFF) ======
+_state = {
+    "unit": DEFAULT_UNIT,                    # "VND" | "USD"
+    "auto_enabled": AUTO_ENABLED_DEFAULT,    # True | False
+}
+
+def load_state():
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    _state.update(data)
+    except Exception:
+        pass
+
+def save_state():
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_state, f, ensure_ascii=False)
+    except Exception:
+        # Render filesystem là ephemeral; redeploy có thể mất file.
+        pass
+
+# load khi import
+load_state()
+
 _last_fail_alert_ts = 0.0
 _is_down = False
 
@@ -47,10 +93,17 @@ def next_slot_info(now: datetime) -> tuple[str, int]:
 
 # ------- UI -------
 def kb_main():
+    # Hiển thị ON/OFF & đơn vị ngay trên các nút
+    onoff = "🟢 Auto ON" if _state.get("auto_enabled") else "🔴 Auto OFF"
+    unit_btn_left  = "✅ 💰 MEXC VND" if _state.get("unit") == "VND" else "💰 MEXC VND"
+    unit_btn_right = "✅ 💵 MEXC USD" if _state.get("unit") == "USD" else "💵 MEXC USD"
+    status_btn = f"🔎 Trạng thái ({'ON' if _state.get('auto_enabled') else 'OFF'})"
+
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("🔎 Trạng thái")],
-            [KeyboardButton("💰 MEXC VND"), KeyboardButton("💵 MEXC USD")],
+            [KeyboardButton(status_btn)],
+            [KeyboardButton(onoff)],
+            [KeyboardButton(unit_btn_left), KeyboardButton(unit_btn_right)],
         ],
         resize_keyboard=True
     )
@@ -60,20 +113,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
     await update.effective_chat.send_message(
         "AUTINER đã sẵn sàng.\n"
-        "• Bật/tắt đơn vị: bấm “💰 MEXC VND” hoặc “💵 MEXC USD”.\n"
-        "• Bot sẽ gửi 5 tín hiệu Scalping mỗi 30’.",
+        "• Bật/tắt tín hiệu tự động: “🟢 Auto ON / 🔴 Auto OFF”.\n"
+        "• Đổi đơn vị hiển thị: “💰 MEXC VND / 💵 MEXC USD”.\n"
+        "• Bot sẽ gửi 5 tín hiệu Scalping mỗi 30’ (khi Auto ON).",
         reply_markup=kb_main()
     )
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
-    # probe nhỏ để biết có live hay không
     _, live, _ = market_snapshot(unit="USD", topn=1)
     text = (
-        "📡 Trạng thái dữ liệu\n"
+        "📡 Trạng thái hệ thống\n"
         "• Nguồn giá: MEXC Futures\n"
-        f"• Trạng thái: {'LIVE ✅' if live else 'DOWN ❌'}\n"
-        f"• Đơn vị hiện tại: {_current_unit}\n"
+        f"• Kết nối: {'LIVE ✅' if live else 'DOWN ❌'}\n"
+        f"• Auto tín hiệu: {'ON 🟢' if _state['auto_enabled'] else 'OFF 🔴'}\n"
+        f"• Đơn vị hiện tại: {_state['unit']}\n"
     )
     await update.effective_chat.send_message(text, reply_markup=kb_main())
 
@@ -81,20 +135,38 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
     txt = (update.message.text or "").strip().lower()
-    global _current_unit
+
     if "trạng thái" in txt:
         return await status_cmd(update, context)
+
+    if "auto on" in txt:
+        _state["auto_enabled"] = True
+        save_state()
+        await update.message.reply_text("✅ ĐÃ BẬT gửi tín hiệu tự động (mỗi 30’).", reply_markup=kb_main())
+        return
+
+    if "auto off" in txt:
+        _state["auto_enabled"] = False
+        save_state()
+        await update.message.reply_text("⏸️ ĐÃ TẮT gửi tín hiệu tự động.", reply_markup=kb_main())
+        return
+
     if "mexc vnd" in txt:
-        _current_unit = "VND"
+        _state["unit"] = "VND"
+        save_state()
         await update.message.reply_text("✅ Đã chuyển đơn vị sang **VND**.", parse_mode=ParseMode.MARKDOWN, reply_markup=kb_main())
         return
+
     if "mexc usd" in txt:
-        _current_unit = "USD"
+        _state["unit"] = "USD"
+        save_state()
         await update.message.reply_text("✅ Đã chuyển đơn vị sang **USD**.", parse_mode=ParseMode.MARKDOWN, reply_markup=kb_main())
         return
 
 # --------- scheduled jobs ----------
 async def morning_brief(context: ContextTypes.DEFAULT_TYPE):
+    if not _state.get("auto_enabled"):
+        return
     chat_id = ALLOWED_USER_ID
     now = datetime.now(VN_TZ)
     wd = weekday_vi(now)
@@ -137,6 +209,8 @@ async def morning_brief(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id, "\n".join(lines))
 
 async def macro_daily(context: ContextTypes.DEFAULT_TYPE):
+    if not _state.get("auto_enabled"):
+        return
     chat_id = ALLOWED_USER_ID
     await context.bot.send_message(
         chat_id,
@@ -145,6 +219,8 @@ async def macro_daily(context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def pre_countdown(context: ContextTypes.DEFAULT_TYPE):
+    if not _state.get("auto_enabled"):
+        return
     chat_id = ALLOWED_USER_ID
     msg = await context.bot.send_message(chat_id, "⏳ Tín hiệu 30’ **tiếp theo** — còn 60s", parse_mode=ParseMode.MARKDOWN)
     for sec in range(59, -1, -1):
@@ -159,8 +235,10 @@ async def pre_countdown(context: ContextTypes.DEFAULT_TYPE):
             pass
 
 async def send_batch_scalping(context: ContextTypes.DEFAULT_TYPE):
+    if not _state.get("auto_enabled"):
+        return
     chat_id = ALLOWED_USER_ID
-    signals, highlights, live, rate = smart_pick_signals(_current_unit, NUM_SCALPING)
+    signals, highlights, live, rate = smart_pick_signals(_state["unit"], NUM_SCALPING)
 
     if (not live) or (not signals):
         now = datetime.now(VN_TZ)
@@ -217,22 +295,21 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status_cmd))
     # text buttons
-    from telegram.ext import MessageHandler, filters
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), on_text))
 
     j = app.job_queue
-    # 06:00 chào buổi sáng, 07:00 macro
+    # 06:00 chào buổi sáng, 07:00 macro (tôn trọng ON/OFF trong hàm)
     j.run_daily(morning_brief, time=dt_time(6,0, tzinfo=VN_TZ))
     j.run_daily(macro_daily,   time=dt_time(7,0, tzinfo=VN_TZ))
 
-    # countdown và batch mỗi slot
+    # countdown và batch mỗi slot (tôn trọng ON/OFF trong hàm)
     for hhmm in SLOT_TIMES:
         h, m = map(int, hhmm.split(":"))
         # countdown trước 60s
         mm = (m - 1) % 60
         hh = h if m > 0 else (h - 1)
         j.run_daily(pre_countdown,        time=dt_time(hh, mm, tzinfo=VN_TZ))
-        j.run_daily(send_batch_scalping,  time=dt_time(h, m,  tzinfo=VN_TZ))
+        j.run_daily(send_batch_scalping,  time=dt_time(h,  m,  tzinfo=VN_TZ))
 
     # health monitor mỗi 60s
     j.run_repeating(health_probe, interval=HEALTH_POLL_SEC, first=10)
