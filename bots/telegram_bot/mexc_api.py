@@ -296,7 +296,7 @@ def ma(vals: List[float], n: int) -> float:
     return sum(vals[-n:]) / n
 
 # ===== Snapshot (USD nền; VND khi cần) =====
-def market_snapshot(unit: str = "VND", topn: int = None) -> Tuple[List[dict], bool, float]:
+def market_snapshot(unit: str = "VND", topn: int | None = None) -> Tuple[List[dict], bool, float]:
     if topn is None:
         topn = DIVERSITY_POOL_TOPN
     items = _fetch_tickers_live()
@@ -458,24 +458,25 @@ def _analyze_klines_for(sym: str) -> dict:
     }
 
 def smart_pick_signals(unit: str, n_scalp: int = 5):
-    global _last_batch, _prev_volume   # ✅ Đặt ngay đầu hàm
+    """
+    Trả: (signals, highlights, live, rate)
+    signal: dict {token, side, type, orderType, entry/zone, tp, sl, strength, reason, unit}
+    """
+    global _last_batch, _prev_volume  # 👈 đặt ở đầu hàm
 
+    # 1) Lấy snapshot nền theo USD để tính động lượng nhất quán
     coins, live, rate = market_snapshot(unit="USD", topn=DIVERSITY_POOL_TOPN)
     if not live or not coins:
         return [], [], live, rate
-    ...
-    _last_batch = {c["symbol"] for (_,_,_,_,c,_) in picked}
-    _prev_volume = {c["symbol"]: c.get("volumeQuote", 0.0) for c in coins}
-    return signals, highlights, live, now_rate
 
-    # Cập nhật lịch sử giá để tính r30/r60 (dựa USD đã auto-denom)
+    # 2) Cập nhật lịch sử giá để tính r30/r60 (dựa USD đã auto-denom)
     now_rate = usd_vnd_rate()
     for c in coins:
-        disp, adj_usd, _ = auto_denom(c["symbol"], c["lastPrice"], now_rate)
+        _, adj_usd, _ = auto_denom(c["symbol"], c["lastPrice"], now_rate)
         dq = _hist_px.setdefault(c["symbol"], deque(maxlen=3))
         dq.append(float(adj_usd))
 
-    # Scoring + đặc trưng nến
+    # 3) Scoring + đặc trưng nến
     pool = []
     prev_vol_map = {c["symbol"]: _prev_volume.get(c["symbol"], 0.0) for c in coins}
     for idx, c in enumerate(coins):
@@ -488,7 +489,7 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
     if not pool:
         return [], [], live, rate
 
-    # Hạn chế lặp: coin trùng batch trước phải có score vượt median + REPEAT_BONUS_DELTA
+    # 4) Hạn chế lặp: coin trùng batch trước phải có score vượt median + REPEAT_BONUS_DELTA
     scores_only = [p[0] for p in pool]
     median = sorted(scores_only)[len(scores_only)//2]
     keep = []
@@ -501,7 +502,7 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
     if not keep:
         keep = pool
 
-    # Ưu tiên điểm cao nhưng vẫn đa dạng
+    # 5) Ưu tiên điểm cao nhưng vẫn đa dạng (softmax sampling)
     keep.sort(key=lambda x: x[0], reverse=True)
     probs = _softmax([k[0] for k in keep])
     bag, p = keep[:], probs[:]
@@ -521,10 +522,9 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
             s = sum(p)
             p = [x/s for x in p]
 
-    # Dựng tín hiệu
+    # 6) Dựng tín hiệu
     signals = []
     highlights = []
-
     for rank, (score, r30, r60, idx, c, feats) in enumerate(picked):
         change  = c.get("change24h_pct", 0.0)
         funding = c.get("fundingRate", 0.0)
@@ -595,8 +595,7 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
             "unit": unit_tag
         })
 
-    # cập nhật batch & prev volume (NHỚ đặt global trước khi gán!)
-    global _last_batch, _prev_volume
+    # 7) Cập nhật batch & prev volume (NHỚ đặt global trước khi gán!)
     _last_batch = {c["symbol"] for (_,_,_,_,c,_) in picked}
     _prev_volume = {c["symbol"]: c.get("volumeQuote", 0.0) for c in coins}
 
