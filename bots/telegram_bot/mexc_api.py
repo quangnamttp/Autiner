@@ -180,9 +180,16 @@ def _fetch_tickers_live() -> List[dict]:
             last = float(it.get("lastPrice") or it.get("last") or it.get("price") or it.get("close") or 0.0)
         except Exception:
             last = 0.0
-        # Quote volume 24h (USDT)
+        # Quote volume 24h (USDT) — map đủ key để tránh rỗng
         try:
-            qvol = float(it.get("quoteVol") or it.get("amount24") or it.get("turnover") or it.get("turnover24") or 0.0)
+            qvol = float(
+                it.get("quoteVol")
+                or it.get("amount24")
+                or it.get("turnover")
+                or it.get("turnover24")
+                or it.get("volume")          # <--- thêm
+                or 0.0
+            )
         except Exception:
             qvol = 0.0
         # % 24h
@@ -244,8 +251,8 @@ def _fetch_funding_live() -> Dict[str, float]:
                     val = it[k]; break
             fr = float(val) if val is not None else 0.0
 
-            # chuẩn hoá về %
-            if abs(fr) < 1.0:
+            # chuẩn hoá về %: nếu trị tuyệt đối <= 0.5 coi là dạng số thực (0.01=1%)
+            if abs(fr) <= 0.5:
                 fr = fr * 100.0
 
             fmap[str(s)] = fr
@@ -460,11 +467,19 @@ def _analyze_klines_for(sym: str) -> dict:
     if len(kl) < 30:
         return {"ok": False}
 
+    # --- chống stale kline (>120s) ---
+    last_ts = kl[-1]["t"]
+    if time.time() - last_ts > 120:
+        return {"ok": False}
+
     closes = [k["c"] for k in kl]
     vols   = [k["v"] for k in kl]
     ema9   = ema(closes, 9)
     ema21  = ema(closes, 21)
     atr    = atr_5m(kl)
+    if atr <= 0:
+        return {"ok": False}  # tránh TP/SL vô nghĩa
+
     ma20v  = ma(vols, 20)
     sig5   = sigma_change(kl, 5)
     sig30  = sigma_change(kl, 30)
@@ -501,7 +516,7 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
     Trả: (signals, highlights, live, rate)
     signal: dict {token, side, type, orderType, entry/zone, tp, sl, strength, reason, unit}
     """
-    global _last_batch, _prev_volume  # 👈 cần ở đầu hàm
+    global _last_batch, _prev_volume  # cần ở đầu hàm
 
     # 1) Lấy snapshot nền theo USD để tính động lượng nhất quán
     coins, live, rate = market_snapshot(unit="USD", topn=DIVERSITY_POOL_TOPN)
@@ -565,7 +580,6 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
     signals = []
     highlights = []
     for rank, (score, r30, r60, idx, c, feats) in enumerate(picked):
-        change  = c.get("change24h_pct", 0.0)
         funding = c.get("fundingRate", 0.0)
 
         ema_up  = feats["trend_up"]
@@ -575,7 +589,11 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
         )
 
         accel = r30 - 0.5*r60
-        side = "LONG" if (r30 > 0 and accel >= 0) else "SHORT"
+        if r30 == 0 and r60 == 0:
+            # không động lượng -> theo trend EMA
+            side = "LONG" if ema_up else "SHORT"
+        else:
+            side = "LONG" if (r30 > 0 and accel >= 0) else "SHORT"
 
         atr  = max(0.0, feats["atr"])
         px_u = float(_hist_px[c["symbol"]][-1])  # USD (đã denom)
