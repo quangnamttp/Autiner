@@ -278,7 +278,12 @@ def _fallback_make_signals(unit: str, coins: List[dict], n: int, rate: float):
         })
     return out
 
+# ... (nguyên phần đầu file y như bản bạn đang có)
+
 def smart_pick_signals(unit: str, n_scalp=5):
+    # >>> FIX: khai báo global trước khi đụng tới 2 biến này
+    global _last_batch, _prev_volume
+
     coins, live, rate = market_snapshot(unit="USD", topn=DIVERSITY_POOL_TOPN)
     if not live or not coins:
         return [], [], live, rate
@@ -370,8 +375,7 @@ def smart_pick_signals(unit: str, n_scalp=5):
         dq = _hist_px.setdefault(c["symbol"], deque(maxlen=3))
         dq.append(float(adj_usd))
 
-    # cập nhật global sau khi dùng
-    global _last_batch, _prev_volume
+    # cập nhật batch & volume cho slot sau
     _last_batch = {c["symbol"] for (_,_,_,_,c) in chosen}
     _prev_volume = {c["symbol"]: c.get("volumeQuote", 0.0) for c in coins}
 
