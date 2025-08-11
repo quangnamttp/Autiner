@@ -5,3 +5,4 @@ requests==2.32.3
 pytz==2024.1
 lunardate==0.2.0
 httpx==0.28.1
+aiohttp==3.9.5
