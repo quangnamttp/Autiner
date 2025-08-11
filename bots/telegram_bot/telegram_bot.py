@@ -1,18 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-Telegram bot — autiner (PRO)
+Telegram bot — autiner (PRO, tối ưu + keepalive Render)
 Menu:
   H1: 🔎 Trạng thái | 🟢/🔴 Auto ON/OFF (đổi nhãn theo trạng thái)
-  H2: 📅 Hôm nay | 📅 Ngày mai
-  H3: 📅 Cả tuần | 🧪 Test
-  H4: 💰 MEXC VND / 💵 MEXC USD (đổi nhãn theo đơn vị)
+  H2: 🧪 Test | 💰 MEXC VND / 💵 MEXC USD (đổi nhãn theo đơn vị)
 Slot: 06:15 → 21:45 (30’)
-• Countdown 15s (chạy ở hh:mm:45 → hh:mm:00, để tránh xung đột lúc gửi tín hiệu).
+• Countdown 15s (hh:mm:45 → hh:mm:00, tránh va chạm khi gửi tín hiệu).
+• Tất cả tác vụ nặng (HTTP, phân tích) chạy trong thread + timeout.
+• Keepalive: tự ping Render mỗi 5 phút để tránh ngủ.
 """
 
 from __future__ import annotations
+import os
 import asyncio
-from datetime import datetime, timedelta, time as dt_time, date as dt_date
+import aiohttp
+from datetime import datetime, timedelta, time as dt_time
 import pytz
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
@@ -24,16 +26,18 @@ from telegram.ext import (
 from settings import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, TZ_NAME,
     SLOT_TIMES, NUM_SCALPING, HEALTH_POLL_SEC,
-    DEFAULT_UNIT
+    DEFAULT_UNIT, PUBLIC_URL, SELF_URL
 )
 from .mexc_api import smart_pick_signals, market_snapshot
 
+# ===== Globals =====
 VN_TZ = pytz.timezone(TZ_NAME)
 _current_unit = DEFAULT_UNIT if DEFAULT_UNIT in ("VND", "USD") else "VND"
 _auto_on = True
 
 # ===== Helpers =====
 def guard(update: Update) -> bool:
+    """Cho phép nếu ALLOWED_USER_ID == 0 (tự do) hoặc user.id khớp."""
     return not (ALLOWED_USER_ID and update.effective_user and update.effective_user.id != ALLOWED_USER_ID)
 
 def vn_now() -> datetime:
@@ -41,10 +45,6 @@ def vn_now() -> datetime:
 
 def vn_now_str() -> str:
     return vn_now().strftime("%H:%M %d/%m/%Y")
-
-def weekday_vi(dt) -> str:
-    names = ["Thứ Hai","Thứ Ba","Thứ Tư","Thứ Năm","Thứ Sáu","Thứ Bảy","Chủ Nhật"]
-    return names[dt.weekday()]
 
 def next_slot_info(now: datetime) -> tuple[str, int]:
     today = now.date()
@@ -61,27 +61,21 @@ def next_slot_info(now: datetime) -> tuple[str, int]:
     mins = max(0, int((nxt - now).total_seconds() // 60))
     return nxt.strftime("%H:%M"), mins
 
-# ===== Nhãn tĩnh =====
-BTN_STATUS   = "🔎 Trạng thái"
-BTN_TODAY    = "📅 Hôm nay"
-BTN_TOMORROW = "📅 Ngày mai"
-BTN_WEEK     = "📅 Cả tuần"
-BTN_TEST     = "🧪 Test"
+# ===== Nhãn nút =====
+BTN_STATUS = "🔎 Trạng thái"
+BTN_TEST   = "🧪 Test"
 
-# ===== Menu động =====
 def main_keyboard() -> ReplyKeyboardMarkup:
     auto_lbl = "🟢 Auto ON" if _auto_on else "🔴 Auto OFF"
     unit_lbl = "💰 MEXC VND" if _current_unit == "VND" else "💵 MEXC USD"
     rows = [
         [BTN_STATUS, auto_lbl],
-        [BTN_TODAY, BTN_TOMORROW],
-        [BTN_WEEK, BTN_TEST],
-        [unit_lbl],
+        [BTN_TEST, unit_lbl],   # ⬅️ chung một hàng
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-# ===== Offload các tác vụ đồng bộ sang thread + timeout =====
-async def _to_thread_signals(unit: str, n: int, timeout: int = 20):
+# ===== Offload sync tasks to thread (non-blocking) =====
+async def _to_thread_signals(unit: str, n: int, timeout: int = 25):
     async def _run():
         return await asyncio.to_thread(smart_pick_signals, unit, n)
     try:
@@ -98,6 +92,33 @@ async def _to_thread_snapshot(topn: int = 1, timeout: int = 8):
         return await asyncio.wait_for(_run(), timeout=timeout)
     except Exception:
         return [], False, 0.0
+
+# ===== Keepalive (Render) =====
+def _resolve_ping_url() -> str:
+    # Ưu tiên KEEPALIVE_URL (env), sau đó PUBLIC_URL, rồi SELF_URL, rồi fallback hardcode
+    return (
+        os.getenv("KEEPALIVE_URL")
+        or (PUBLIC_URL if PUBLIC_URL else None)
+        or (SELF_URL if SELF_URL else None)
+        or "http://autiner.onrender.com"
+    )
+
+async def keepalive_ping(context: ContextTypes.DEFAULT_TYPE):
+    url = _resolve_ping_url()
+    if not url:
+        return
+    # đảm bảo là URL hợp lệ
+    if not (url.startswith("http://") or url.startswith("https://")):
+        url = "https://" + url
+    try:
+        timeout = aiohttp.ClientTimeout(total=6)
+        async with aiohttp.ClientSession(timeout=timeout, headers={"User-Agent":"autiner-keepalive/1.0"}) as sess:
+            async with sess.get(url) as resp:
+                # không cần nội dung; chỉ cần đánh thức instance
+                _ = resp.status
+    except Exception:
+        # im lặng, không làm hỏng loop
+        pass
 
 # ===== Commands =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,29 +138,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard()
     )
 
-# ===== Lịch (placeholder vĩ mô) =====
-async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# manual /ping để kiểm tra keepalive ngay
+async def ping_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
-    now = vn_now()
-    text = (
-        f"📅 Hôm nay: {weekday_vi(now)}, {now.strftime('%d/%m/%Y')}\n"
-        "• Lịch vĩ mô: (sẽ bổ sung sau)."
-    )
-    await update.effective_chat.send_message(text, reply_markup=main_keyboard())
-
-async def tomorrow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not guard(update): return
-    tm = vn_now() + timedelta(days=1)
-    text = (
-        f"📅 Ngày mai: {weekday_vi(tm)}, {tm.strftime('%d/%m/%Y')}\n"
-        "• Lịch vĩ mô: (sẽ bổ sung sau)."
-    )
-    await update.effective_chat.send_message(text, reply_markup=main_keyboard())
-
-async def week_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not guard(update): return
-    lines = ["📅 Cả tuần (vĩ mô):", "• Chưa kết nối nguồn — sẽ bổ sung sau."]
-    await update.effective_chat.send_message("\n".join(lines), reply_markup=main_keyboard())
+    await keepalive_ping(context)
+    await update.effective_chat.send_message("✅ Đã ping Render.", reply_markup=main_keyboard())
 
 # ===== Toggle =====
 async def toggle_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,12 +164,12 @@ async def toggle_unit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard()
     )
 
-# ===== Nút Test: tạo tín hiệu ngay (không chặn loop) =====
+# ===== Nút Test =====
 async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
     await update.effective_chat.send_message("🧪 Đang tạo tín hiệu thử...", reply_markup=main_keyboard())
 
-    signals, highlights, live, rate = await _to_thread_signals(_current_unit, NUM_SCALPING, timeout=20)
+    signals, highlights, live, rate = await _to_thread_signals(_current_unit, NUM_SCALPING, timeout=25)
     if (not live) or (not signals):
         return await update.effective_chat.send_message("⚠️ Chưa đủ dữ liệu / nguồn chậm, thử lại sau.", reply_markup=main_keyboard())
 
@@ -183,7 +186,7 @@ async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.effective_chat.send_message(msg, reply_markup=main_keyboard())
 
-# ===== Countdown 15s trước slot =====
+# ===== Countdown 15s trước mỗi slot =====
 async def pre_countdown(context: ContextTypes.DEFAULT_TYPE):
     if not _auto_on:
         return
@@ -209,13 +212,13 @@ async def pre_countdown(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         return
 
-# ===== Batch tín hiệu (không chặn loop) =====
+# ===== Gửi batch tín hiệu đúng hh:mm:00 =====
 async def send_batch_scalping(context: ContextTypes.DEFAULT_TYPE):
     if not _auto_on:
         return
     chat_id = ALLOWED_USER_ID
 
-    signals, highlights, live, rate = await _to_thread_signals(_current_unit, NUM_SCALPING, timeout=25)
+    signals, highlights, live, rate = await _to_thread_signals(_current_unit, NUM_SCALPING, timeout=28)
     if (not live) or (not signals):
         now = vn_now()
         nxt_hhmm, mins = next_slot_info(now)
@@ -241,7 +244,7 @@ async def send_batch_scalping(context: ContextTypes.DEFAULT_TYPE):
         )
         await context.bot.send_message(chat_id, msg, reply_markup=main_keyboard())
 
-# ===== Health monitor (không chặn loop) =====
+# ===== Health monitor (nhẹ, không chặn) =====
 async def health_probe(context: ContextTypes.DEFAULT_TYPE):
     if not _auto_on:
         return
@@ -260,7 +263,7 @@ async def health_probe(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-# ===== Text router =====
+# ===== Text router (nhanh, không chặn) =====
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
     txt = (update.message.text or "").strip().lower()
@@ -269,16 +272,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await status_cmd(update, context)
     if "auto" in txt:
         return await toggle_auto(update, context)
-    if "hôm nay" in txt:
-        return await today_cmd(update, context)
-    if "ngày mai" in txt:
-        return await tomorrow_cmd(update, context)
-    if "cả tuần" in txt:
-        return await week_cmd(update, context)
     if "test" in txt:
         return await test_cmd(update, context)
     if "mexc" in txt or "đơn vị" in txt or "usd" in txt or "vnd" in txt:
         return await toggle_unit(update, context)
+    if "ping" in txt:
+        return await ping_cmd(update, context)
 
     await update.effective_chat.send_message("Mời chọn từ menu bên dưới.", reply_markup=main_keyboard())
 
@@ -288,6 +287,7 @@ def build_app() -> Application:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("ping",   ping_cmd))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), on_text))
 
     j = app.job_queue
@@ -296,7 +296,10 @@ def build_app() -> Application:
         # countdown 15s: chạy lúc hh:mm:45
         j.run_daily(pre_countdown,       time=dt_time(h, m, 45, tzinfo=VN_TZ))
         # gửi tín hiệu đúng hh:mm:00
-        j.run_daily(send_batch_scalping, time=dt_time(h, m, 0,  tzinfo=VN_TZ))
+        j.run_daily(send_batch_scalping, time=dt_time(h, m,  0, tzinfo=VN_TZ))
 
-    j.run_repeating(health_probe, interval=HEALTH_POLL_SEC, first=10)
+    # Health + Keepalive
+    j.run_repeating(health_probe,   interval=HEALTH_POLL_SEC, first=10)
+    j.run_repeating(keepalive_ping, interval=300,             first=5)   # 5 phút
+
     return app
