@@ -22,30 +22,26 @@ import random
 from decimal import Decimal, ROUND_DOWN
 from typing import List, Dict, Tuple
 from collections import deque
-
 import requests
 
 # ===== Settings (có mặc định để chạy ngay nếu thiếu trong settings.py) =====
 try:
     from settings import (
         # API endpoints
-        MEXC_TICKER_URL,          # ví dụ: https://contract.mexc.com/api/v1/contract/ticker
-        MEXC_FUNDING_URL,         # ví dụ: https://contract.mexc.com/api/v1/contract/fundingRate
-        MEXC_KLINES_URL,          # ví dụ: https://contract.mexc.com/api/v1/contract/kline?symbol={sym}&interval=Min1&limit=120
-        USDVND_URL,               # ví dụ: https://api.exchangerate.host/latest?base=USD&symbols=VND
-
-        # HTTP config
+        MEXC_TICKER_URL,
+        MEXC_FUNDING_URL,
+        MEXC_KLINES_URL,
+        USDVND_URL,
+        # HTTP
         HTTP_TIMEOUT, HTTP_RETRY,
-
-        # FX cache TTL
+        # FX cache
         FX_CACHE_TTL,
-
         # Lọc & logic
         VOL24H_FLOOR,
         BREAK_VOL_MULT, FUNDING_ABS_LIM,
         ATR_ENTRY_K, ATR_ZONE_K, ATR_TP_K, ATR_SL_K,
-        TTL_MINUTES,                   # TTL cho lệnh LIMIT (phút)
-        TRAIL_START_K, TRAIL_STEP_K,   # (để dành)
+        TTL_MINUTES,
+        TRAIL_START_K, TRAIL_STEP_K,
         DIVERSITY_POOL_TOPN, SAME_PRICE_EPS, REPEAT_BONUS_DELTA,
     )
 except Exception:
@@ -55,15 +51,13 @@ except Exception:
     MEXC_KLINES_URL  = "https://contract.mexc.com/api/v1/contract/kline?symbol={sym}&interval=Min1&limit=120"
     USDVND_URL       = "https://api.exchangerate.host/latest?base=USD&symbols=VND"
 
-    # HTTP & cache
     HTTP_TIMEOUT = 10
     HTTP_RETRY   = 2
     FX_CACHE_TTL = 1800  # 30 phút
 
-    # Lọc & logic
-    VOL24H_FLOOR   = 200_000   # USDT: bỏ coin quá kém thanh khoản
+    VOL24H_FLOOR   = 200_000
     BREAK_VOL_MULT = 1.30
-    FUNDING_ABS_LIM = 0.05     # 5%
+    FUNDING_ABS_LIM = 0.05
 
     ATR_ENTRY_K = 0.30
     ATR_ZONE_K  = 0.20
@@ -137,8 +131,9 @@ def _get_json(url: str):
             r = _session.get(url, headers=_HEADERS, timeout=HTTP_TIMEOUT)
             if r.status_code == 200:
                 return r.json()
+            time.sleep(0.2)
         except Exception:
-            pass
+            time.sleep(0.2)
     return None
 
 def usd_vnd_rate() -> float:
@@ -148,7 +143,6 @@ def usd_vnd_rate() -> float:
     js = _get_json(USDVND_URL)
     if isinstance(js, dict):
         try:
-            # exchangerate.host: {"rates":{"VND": <rate>}, ...}
             rate = float(js.get("rates", {}).get("VND"))
             if rate > 0:
                 _last_fx.update(ts=now, rate=rate)
@@ -159,7 +153,8 @@ def usd_vnd_rate() -> float:
 
 # ===== Fetch live =====
 def _fetch_tickers_live() -> List[dict]:
-    """Chuẩn hoá:
+    """
+    Chuẩn hoá một danh sách:
     {
       symbol: "BTC_USDT",
       lastPrice: <USD>,
@@ -180,19 +175,27 @@ def _fetch_tickers_live() -> List[dict]:
         sym = it.get("symbol") or it.get("instrument_id")
         if not sym or not str(sym).endswith("_USDT"):
             continue
-        try: last = float(it.get("lastPrice") or it.get("last") or it.get("price") or 0.0)
-        except: last = 0.0
-        try: qvol = float(it.get("quoteVol") or it.get("amount24") or it.get("turnover") or 0.0)
-        except: qvol = 0.0
+        # Giá USD
+        try:
+            last = float(it.get("lastPrice") or it.get("last") or it.get("price") or it.get("close") or 0.0)
+        except Exception:
+            last = 0.0
+        # Quote volume 24h (USDT)
+        try:
+            qvol = float(it.get("quoteVol") or it.get("amount24") or it.get("turnover") or it.get("turnover24") or 0.0)
+        except Exception:
+            qvol = 0.0
+        # % 24h
         try:
             raw = it.get("riseFallRate") or it.get("changeRate") or it.get("percent") or 0
             chg = float(raw)
-            if abs(chg) < 1.0: chg *= 100.0
-        except:
+            if abs(chg) < 1.0:
+                chg *= 100.0
+        except Exception:
             chg = 0.0
 
         items.append({
-            "symbol": sym,
+            "symbol": str(sym),
             "lastPrice": last,
             "volumeQuote": qvol,
             "change24h_pct": chg,
@@ -200,17 +203,54 @@ def _fetch_tickers_live() -> List[dict]:
     return items
 
 def _fetch_funding_live() -> Dict[str, float]:
-    fjson = _get_json(MEXC_FUNDING_URL)
+    """
+    Trả về map { "BTC_USDT": funding_percent, ... }.
+    Hỗ trợ cả 2 endpoint:
+    - /api/v1/contract/fundingRate            -> {"success":true,"data":[...]}
+    - /api/v1/contract/funding_rate/last-rate -> {"data":[...]} hoặc list trực tiếp
+    Các key khả dĩ: fundingRate | rate | value ; symbol | currency
+    """
+    js = _get_json(MEXC_FUNDING_URL)
     fmap: Dict[str, float] = {}
-    if isinstance(fjson, dict) and (fjson.get("success") or "data" in fjson):
-        data = fjson.get("data") or fjson
-        lst = data if isinstance(data, list) else data.get("list") or []
-        for it in lst:
-            s = it.get("symbol") or it.get("currency")
-            if s and str(s).endswith("_USDT"):
-                try: fr = float(it.get("fundingRate") or it.get("rate") or it.get("value") or 0.0)
-                except: fr = 0.0
-                fmap[s] = fr * 100.0
+    if js is None:
+        return fmap
+
+    # gom rows
+    rows = None
+    if isinstance(js, dict):
+        if isinstance(js.get("data"), list):
+            rows = js["data"]
+        elif isinstance(js.get("list"), list):
+            rows = js["list"]
+        elif js.get("success") and isinstance(js.get("data"), list):
+            rows = js["data"]
+    elif isinstance(js, list):
+        rows = js
+
+    if not rows:
+        return fmap
+
+    for it in rows:
+        try:
+            s = it.get("symbol") if isinstance(it, dict) else None
+            if not s:
+                s = it.get("currency") if isinstance(it, dict) else None
+            if not s or not str(s).endswith("_USDT"):
+                continue
+
+            val = None
+            for k in ("fundingRate", "rate", "value"):
+                if isinstance(it, dict) and k in it:
+                    val = it[k]; break
+            fr = float(val) if val is not None else 0.0
+
+            # chuẩn hoá về %
+            if abs(fr) < 1.0:
+                fr = fr * 100.0
+
+            fmap[str(s)] = fr
+        except Exception:
+            continue
     return fmap
 
 def _fetch_klines_1m(sym: str) -> List[dict]:
@@ -225,12 +265,11 @@ def _fetch_klines_1m(sym: str) -> List[dict]:
         rows = []
     for r in rows:
         try:
-            # MEXC kline thường: [time_ms, open, high, low, close, vol, ...]
+            # MEXC kline: [time_ms, open, high, low, close, vol, ...]
             t = int(r[0]) // 1000
             o = float(r[1]); h = float(r[2]); l = float(r[3]); c = float(r[4]); v = float(r[5])
             out.append({"t": t, "o": o, "h": h, "l": l, "c": c, "v": v})
         except Exception:
-            # Thử dạng dict
             try:
                 t = int(r.get("time", 0)) // 1000
                 o = float(r.get("open")); h = float(r.get("high")); l = float(r.get("low")); c = float(r.get("close")); v = float(r.get("vol"))
@@ -462,7 +501,7 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
     Trả: (signals, highlights, live, rate)
     signal: dict {token, side, type, orderType, entry/zone, tp, sl, strength, reason, unit}
     """
-    global _last_batch, _prev_volume  # 👈 đặt ở đầu hàm
+    global _last_batch, _prev_volume  # 👈 cần ở đầu hàm
 
     # 1) Lấy snapshot nền theo USD để tính động lượng nhất quán
     coins, live, rate = market_snapshot(unit="USD", topn=DIVERSITY_POOL_TOPN)
@@ -489,7 +528,7 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
     if not pool:
         return [], [], live, rate
 
-    # 4) Hạn chế lặp: coin trùng batch trước phải có score vượt median + REPEAT_BONUS_DELTA
+    # 4) Hạn chế lặp
     scores_only = [p[0] for p in pool]
     median = sorted(scores_only)[len(scores_only)//2]
     keep = []
@@ -502,7 +541,7 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
     if not keep:
         keep = pool
 
-    # 5) Ưu tiên điểm cao nhưng vẫn đa dạng (softmax sampling)
+    # 5) Ưu tiên điểm cao nhưng vẫn đa dạng (softmax)
     keep.sort(key=lambda x: x[0], reverse=True)
     probs = _softmax([k[0] for k in keep])
     bag, p = keep[:], probs[:]
@@ -595,7 +634,7 @@ def smart_pick_signals(unit: str, n_scalp: int = 5):
             "unit": unit_tag
         })
 
-    # 7) Cập nhật batch & prev volume (NHỚ đặt global trước khi gán!)
+    # 7) Cập nhật batch & prev volume
     _last_batch = {c["symbol"] for (_,_,_,_,c,_) in picked}
     _prev_volume = {c["symbol"]: c.get("volumeQuote", 0.0) for c in coins}
 
