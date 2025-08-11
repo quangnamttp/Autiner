@@ -10,8 +10,8 @@ from settings import (
 _session = requests.Session()
 _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124 Safari/537.36"}
 
-_last_fx = {"ts": 0.0, "rate": 24500.0}  # fallback
-_last_snapshot: Dict[str, Dict] = {}     # để phát hiện volume spike
+_last_fx = {"ts": 0.0, "rate": 24500.0}  # tỷ giá fallback
+_prev_volume: Dict[str, float] = {}      # để tính volume spike highlight
 
 def _get_json(url: str):
     for _ in range(max(1, HTTP_RETRY)):
@@ -39,12 +39,7 @@ def usd_vnd_rate() -> float:
             pass
     return _last_fx["rate"]
 
-def get_mexc_futures() -> Tuple[List[dict], Dict[str, float]]:
-    """
-    Trả (tickers, funding_map)
-    tickers item chuẩn hóa: {symbol, lastPrice, volumeQuote, change24h_pct}
-    funding_map: {symbol: fundingRate%}
-    """
+def _fetch_tickers_live() -> List[dict]:
     tick = _get_json(MEXC_TICKER_URL)
     items = []
     if isinstance(tick, dict) and tick.get("success"):
@@ -63,7 +58,6 @@ def get_mexc_futures() -> Tuple[List[dict], Dict[str, float]]:
         try: qvol = float(it.get("quoteVol") or it.get("amount24") or it.get("turnover") or 0)
         except: qvol = 0.0
         try:
-            # riseFallRate thường là dạng 0.0123 => 1.23%
             raw = it.get("riseFallRate") or it.get("changeRate") or it.get("percent") or 0
             chg = float(raw) * (100.0 if abs(float(raw)) < 1.0 else 1.0)
         except:
@@ -75,8 +69,9 @@ def get_mexc_futures() -> Tuple[List[dict], Dict[str, float]]:
             "volumeQuote": qvol,           # USDT
             "change24h_pct": chg,          # %
         })
+    return items
 
-    # funding
+def _fetch_funding_live() -> Dict[str, float]:
     fjson = _get_json(MEXC_FUNDING_URL)
     fmap: Dict[str, float] = {}
     if isinstance(fjson, dict) and (fjson.get("success") or "data" in fjson):
@@ -85,20 +80,23 @@ def get_mexc_futures() -> Tuple[List[dict], Dict[str, float]]:
         for it in lst:
             s = it.get("symbol") or it.get("currency")
             if s and str(s).endswith("_USDT"):
-                try:
-                    fr = float(it.get("fundingRate") or it.get("rate") or it.get("value") or 0)
-                except:
-                    fr = 0.0
+                try: fr = float(it.get("fundingRate") or it.get("rate") or it.get("value") or 0)
+                except: fr = 0.0
                 fmap[s] = fr * 100.0  # %
-    return items, fmap
+    return fmap
 
 def top_symbols(unit: str = "VND", topn: int = 30):
-    coins, fmap = get_mexc_futures()
-    live = len(coins) > 0
-    rate = usd_vnd_rate()
+    """
+    LIVE-ONLY: nếu không lấy được dữ liệu -> trả ([], False, rate)
+    """
+    items = _fetch_tickers_live()
+    if not items:
+        return [], False, usd_vnd_rate()
 
-    coins.sort(key=lambda d: d.get("volumeQuote", 0.0), reverse=True)
-    sel = coins[:topn]
+    fmap = _fetch_funding_live()
+    rate = usd_vnd_rate()
+    items.sort(key=lambda d: d.get("volumeQuote", 0.0), reverse=True)
+    sel = items[:topn]
     for d in sel:
         d["fundingRate"] = fmap.get(d["symbol"], 0.0)
         if unit == "VND":
@@ -107,41 +105,32 @@ def top_symbols(unit: str = "VND", topn: int = 30):
         else:
             d["lastPriceVND"] = None
             d["volumeValueVND"] = None
-    return sel, live, rate
+    return sel, True, rate
 
 def pick_scalping_signals(unit: str, n_scalp=5):
     coins, live, rate = top_symbols(unit=unit, topn=30)
-    if not coins:
+    if not live or not coins:
         return [], [], live, rate
 
-    # pool top12
+    # chọn top 12 làm pool, lấy các vị trí 0,2,4,6,8
     pool = coins[:12]
-    idxs = [0, 2, 4, 6, 8]  # 5 lệnh
+    idxs = [0, 2, 4, 6, 8]
     chosen = [pool[i] for i in idxs if i < len(pool)]
 
-    # highlights (khẩn) dựa funding/volume spike top10
+    # highlight "khẩn" dựa funding & volume spike top10
     highlights = []
-    global _last_snapshot
+    global _prev_volume
     for c in coins[:10]:
         sym = c["symbol"]
-        prev = _last_snapshot.get(sym, {})
-        spike = False
-        if prev:
-            pv = prev.get("volumeQuote", 0.0)
-            if pv > 0 and c["volumeQuote"] / pv >= ALERT_VOLUME_SPIKE:
-                spike = True
+        pv = _prev_volume.get(sym, 0.0)
+        spike = (pv > 0 and c["volumeQuote"]/pv >= ALERT_VOLUME_SPIKE)
         if abs(c.get("fundingRate", 0.0)) >= ALERT_FUNDING_ABS * 100 or spike:
-            txt = f"{sym} f={c.get('fundingRate',0):.3f}%"
+            tag = f"{sym} f={c.get('fundingRate',0):.3f}%"
             if spike:
-                try:
-                    ratio = c["volumeQuote"]/max(1.0, prev.get("volumeQuote",1.0))
-                except:
-                    ratio = 0.0
-                txt += f" • Vol x{ratio:.1f}"
-            highlights.append(txt)
-    _last_snapshot = {c["symbol"]: {"volumeQuote": c["volumeQuote"]} for c in coins}
+                tag += f" • Vol x{(c['volumeQuote']/max(1.0,pv)):.1f}"
+            highlights.append(tag)
+    _prev_volume = {c["symbol"]: c["volumeQuote"] for c in coins}
 
-    # tạo tín hiệu scalping
     def fmt_vnd(x: float) -> str:
         return f"{int(round(x)):,}".replace(",", ".")
 
@@ -151,16 +140,12 @@ def pick_scalping_signals(unit: str, n_scalp=5):
         funding = c.get("fundingRate", 0.0)
         side = "LONG" if (change >= 0 and funding > -0.02) else "SHORT"
 
-        # strength
-        base = max(0, 100 - rank*3)   # rank cao điểm nền cao
+        base = max(0, 100 - rank*3)
         trend = min(40, abs(change))
         fr = min(20, abs(funding)*2)
         strength = int(max(30, min(95, base*0.5 + trend + fr)))
 
-        # giá hiện tại (đơn vị theo unit)
         px = c["lastPriceVND"] if unit=="VND" else c["lastPrice"]
-
-        # TP/SL scalping
         if side == "LONG":
             tp = px * 1.006
             sl = px * 0.992
