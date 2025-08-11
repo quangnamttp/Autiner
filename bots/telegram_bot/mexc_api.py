@@ -10,8 +10,33 @@ from settings import (
 _session = requests.Session()
 _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124 Safari/537.36"}
 
-_last_fx = {"ts": 0.0, "rate": 24500.0}  # tỷ giá fallback
-_prev_volume: Dict[str, float] = {}      # để tính volume spike highlight
+_last_fx = {"ts": 0.0, "rate": 24500.0}  # fallback
+_prev_volume: Dict[str, float] = {}      # để tính volume spike
+
+# ========= Formatter (kiểu ONUS & USD) =========
+def fmt_vnd_onus(x: float) -> str:
+    """
+    Kiểu ONUS (theo ảnh bạn gửi):
+    - Nghìn dùng dấu ',' ; thập phân dùng '.'
+    - Nếu x >= 1: tối đa 2 số thập phân, bỏ .00
+    - Nếu x < 1: giữ chi tiết 4–6 số thập phân
+    - Không thêm ký hiệu ₫
+    """
+    if x >= 1:
+        s = f"{x:,.2f}"
+        if s.endswith(".00"):
+            s = s[:-3]
+        s = s.rstrip("0").rstrip(".")
+        return s
+    s = f"{x:.6f}".rstrip("0").rstrip(".")
+    if s == "0":
+        s = "0.0001"
+    return s
+
+def fmt_usd(x: float) -> str:
+    s = f"{x:,.4f}".rstrip("0").rstrip(".")
+    return s
+# ===============================================
 
 def _get_json(url: str):
     for _ in range(max(1, HTTP_RETRY)):
@@ -64,10 +89,10 @@ def _fetch_tickers_live() -> List[dict]:
             chg = 0.0
 
         items.append({
-            "symbol": sym,
-            "lastPrice": last,
-            "volumeQuote": qvol,
-            "change24h_pct": chg,
+            "symbol": sym,                 # BTC_USDT
+            "lastPrice": last,             # USDT
+            "volumeQuote": qvol,           # USDT
+            "change24h_pct": chg,          # %
         })
     return items
 
@@ -82,10 +107,11 @@ def _fetch_funding_live() -> Dict[str, float]:
             if s and str(s).endswith("_USDT"):
                 try: fr = float(it.get("fundingRate") or it.get("rate") or it.get("value") or 0)
                 except: fr = 0.0
-                fmap[s] = fr * 100.0
+                fmap[s] = fr * 100.0  # %
     return fmap
 
 def top_symbols(unit: str = "VND", topn: int = 30):
+    """LIVE-ONLY: nếu không lấy được dữ liệu -> trả ([], False, rate)"""
     items = _fetch_tickers_live()
     if not items:
         return [], False, usd_vnd_rate()
@@ -97,8 +123,8 @@ def top_symbols(unit: str = "VND", topn: int = 30):
     for d in sel:
         d["fundingRate"] = fmap.get(d["symbol"], 0.0)
         if unit == "VND":
-            d["lastPriceVND"] = int(round(d["lastPrice"] * rate))
-            d["volumeValueVND"] = int(round(d["volumeQuote"] * rate))
+            d["lastPriceVND"] = d["lastPrice"] * rate
+            d["volumeValueVND"] = d["volumeQuote"] * rate
         else:
             d["lastPriceVND"] = None
             d["volumeValueVND"] = None
@@ -109,10 +135,12 @@ def pick_scalping_signals(unit: str, n_scalp=5):
     if not live or not coins:
         return [], [], live, rate
 
+    # chọn 5 mã từ top 12 (0,2,4,6,8)
     pool = coins[:12]
     idxs = [0, 2, 4, 6, 8]
     chosen = [pool[i] for i in idxs if i < len(pool)]
 
+    # nổi bật: funding lệch mạnh hoặc volume spike
     highlights = []
     global _prev_volume
     for c in coins[:10]:
@@ -126,9 +154,6 @@ def pick_scalping_signals(unit: str, n_scalp=5):
             highlights.append(tag)
     _prev_volume = {c["symbol"]: c["volumeQuote"] for c in coins}
 
-    def fmt_vnd(x: float) -> str:
-        return f"{int(round(x)):,}".replace(",", ".")
-
     signals = []
     for rank, c in enumerate(chosen):
         change = c.get("change24h_pct", 0.0)
@@ -140,31 +165,28 @@ def pick_scalping_signals(unit: str, n_scalp=5):
         fr = min(20, abs(funding)*2)
         strength = int(max(30, min(95, base*0.5 + trend + fr)))
 
-        px = c["lastPriceVND"] if unit=="VND" else c["lastPrice"]
-        if side == "LONG":
-            tp = px * 1.006
-            sl = px * 0.992
-        else:
-            tp = px * 0.994
-            sl = px * 1.008
-
-        token = c["symbol"].replace("_USDT","")
         if unit == "VND":
-            entry = fmt_vnd(px) + "₫"
-            tp_s  = fmt_vnd(tp) + "₫"
-            sl_s  = fmt_vnd(sl) + "₫"
+            px = c["lastPriceVND"]
+            tp = px * (1.006 if side == "LONG" else 0.994)
+            sl = px * (0.992 if side == "LONG" else 1.008)
+            entry = fmt_vnd_onus(px)
+            tp_s  = fmt_vnd_onus(tp)
+            sl_s  = fmt_vnd_onus(sl)
             unit_tag = "VND"
-            volq = fmt_vnd(c['volumeValueVND']) + "₫"
+            volq = fmt_vnd_onus(c["volumeValueVND"]) + " VND"
         else:
-            entry = f"{px:.4f} USDT".rstrip("0").rstrip(".")
-            tp_s  = f"{tp:.4f} USDT".rstrip("0").rstrip(".")
-            sl_s  = f"{sl:.4f} USDT".rstrip("0").rstrip(".")
+            px = c["lastPrice"]
+            tp = px * (1.006 if side == "LONG" else 0.994)
+            sl = px * (0.992 if side == "LONG" else 1.008)
+            entry = fmt_usd(px) + " USDT"
+            tp_s  = fmt_usd(tp) + " USDT"
+            sl_s  = fmt_usd(sl) + " USDT"
             unit_tag = "USD"
             volq = f"{c['volumeQuote']:,.0f} USDT"
 
         reason = f"Funding={funding:+.3f}%, VolQ≈{volq}, Δ24h={change:+.2f}%"
         signals.append({
-            "token": token,
+            "token": c["symbol"].replace("_USDT",""),
             "side": side,
             "type": "Scalping",
             "orderType": "Market",
