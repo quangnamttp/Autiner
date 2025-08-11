@@ -80,6 +80,25 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
+# ===== Offload các tác vụ đồng bộ sang thread + timeout =====
+async def _to_thread_signals(unit: str, n: int, timeout: int = 20):
+    async def _run():
+        return await asyncio.to_thread(smart_pick_signals, unit, n)
+    try:
+        return await asyncio.wait_for(_run(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return None, None, False, None
+    except Exception:
+        return None, None, False, None
+
+async def _to_thread_snapshot(topn: int = 1, timeout: int = 8):
+    async def _run():
+        return await asyncio.to_thread(market_snapshot, "USD", topn)
+    try:
+        return await asyncio.wait_for(_run(), timeout=timeout)
+    except Exception:
+        return [], False, 0.0
+
 # ===== Commands =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
@@ -90,7 +109,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
-    _, live, _ = market_snapshot(unit="USD", topn=1)
+    _, live, _ = await _to_thread_snapshot(topn=1)
     await update.effective_chat.send_message(
         f"📡 Trạng thái dữ liệu: {'LIVE ✅' if live else 'DOWN ❌'}\n"
         f"• Đơn vị hiện tại: {_current_unit}\n"
@@ -119,7 +138,6 @@ async def tomorrow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def week_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
-    base = vn_now().date()
     lines = ["📅 Cả tuần (vĩ mô):", "• Chưa kết nối nguồn — sẽ bổ sung sau."]
     await update.effective_chat.send_message("\n".join(lines), reply_markup=main_keyboard())
 
@@ -143,18 +161,14 @@ async def toggle_unit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard()
     )
 
-# ===== Nút Test: tạo tín hiệu ngay =====
+# ===== Nút Test: tạo tín hiệu ngay (không chặn loop) =====
 async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
-    chat_id = update.effective_chat.id
     await update.effective_chat.send_message("🧪 Đang tạo tín hiệu thử...", reply_markup=main_keyboard())
-    try:
-        signals, highlights, live, rate = smart_pick_signals(_current_unit, NUM_SCALPING)
-    except Exception as e:
-        return await update.effective_chat.send_message(f"⚠️ Lỗi tạo tín hiệu: {e}", reply_markup=main_keyboard())
 
+    signals, highlights, live, rate = await _to_thread_signals(_current_unit, NUM_SCALPING, timeout=20)
     if (not live) or (not signals):
-        return await update.effective_chat.send_message("⚠️ Chưa đủ dữ liệu để tạo tín hiệu lúc này.", reply_markup=main_keyboard())
+        return await update.effective_chat.send_message("⚠️ Chưa đủ dữ liệu / nguồn chậm, thử lại sau.", reply_markup=main_keyboard())
 
     header = f"📌 (TEST) {len(signals)} lệnh — {vn_now_str()}"
     await update.effective_chat.send_message(header)
@@ -180,7 +194,6 @@ async def pre_countdown(context: ContextTypes.DEFAULT_TYPE):
             "⏳ Tín hiệu 30’ **tiếp theo** — còn 15s",
             parse_mode=ParseMode.MARKDOWN
         )
-        # cập nhật mỗi 1s; dừng khi còn <=1s để tránh va chạm lúc gửi batch
         for sec in range(14, -1, -1):
             if sec <= 1:
                 break
@@ -192,33 +205,26 @@ async def pre_countdown(context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=ParseMode.MARKDOWN
                 )
             except Exception:
-                # nếu Telegram báo lỗi (rate/duplicate), bỏ qua và tiếp tục
                 pass
     except Exception:
-        # không để countdown làm hỏng job
         return
 
-# ===== Batch tín hiệu (chạy đúng hh:mm:00) =====
+# ===== Batch tín hiệu (không chặn loop) =====
 async def send_batch_scalping(context: ContextTypes.DEFAULT_TYPE):
     if not _auto_on:
         return
     chat_id = ALLOWED_USER_ID
-    try:
-        signals, highlights, live, rate = smart_pick_signals(_current_unit, NUM_SCALPING)
-    except Exception as e:
-        await context.bot.send_message(chat_id, f"⚠️ Lỗi tạo tín hiệu: {e}", reply_markup=main_keyboard())
-        return
 
+    signals, highlights, live, rate = await _to_thread_signals(_current_unit, NUM_SCALPING, timeout=25)
     if (not live) or (not signals):
         now = vn_now()
         nxt_hhmm, mins = next_slot_info(now)
-        await context.bot.send_message(
+        return await context.bot.send_message(
             chat_id,
             f"⚠️ Slot {now.strftime('%H:%M')} không có dữ liệu đủ/kịp để tạo tín hiệu.\n"
             f"🗓️ Dự kiến slot kế tiếp **{nxt_hhmm}** (~{mins}’).",
             reply_markup=main_keyboard()
         )
-        return
 
     header = f"📌 Tín hiệu {len(signals)} lệnh (Scalping) — {vn_now_str()}"
     await context.bot.send_message(chat_id, header)
@@ -235,13 +241,13 @@ async def send_batch_scalping(context: ContextTypes.DEFAULT_TYPE):
         )
         await context.bot.send_message(chat_id, msg, reply_markup=main_keyboard())
 
-# ===== Health monitor =====
+# ===== Health monitor (không chặn loop) =====
 async def health_probe(context: ContextTypes.DEFAULT_TYPE):
     if not _auto_on:
         return
     chat_id = ALLOWED_USER_ID
     try:
-        coins, live, _ = market_snapshot(unit="USD", topn=1)
+        coins, live, _ = await _to_thread_snapshot(topn=1, timeout=8)
         if not live or not coins:
             now = vn_now()
             nxt_hhmm, mins = next_slot_info(now)
