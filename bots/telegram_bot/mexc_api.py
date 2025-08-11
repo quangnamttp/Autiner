@@ -458,13 +458,15 @@ def _analyze_klines_for(sym: str) -> dict:
     }
 
 def smart_pick_signals(unit: str, n_scalp: int = 5):
-    """
-    Trả: (signals, highlights, live, rate)
-    signal: dict {token, side, type, orderType, entry/zone, tp, sl, strength, reason, unit}
-    """
+    global _last_batch, _prev_volume   # ✅ Đặt ngay đầu hàm
+
     coins, live, rate = market_snapshot(unit="USD", topn=DIVERSITY_POOL_TOPN)
     if not live or not coins:
         return [], [], live, rate
+    ...
+    _last_batch = {c["symbol"] for (_,_,_,_,c,_) in picked}
+    _prev_volume = {c["symbol"]: c.get("volumeQuote", 0.0) for c in coins}
+    return signals, highlights, live, now_rate
 
     # Cập nhật lịch sử giá để tính r30/r60 (dựa USD đã auto-denom)
     now_rate = usd_vnd_rate()
