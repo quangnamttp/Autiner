@@ -45,6 +45,21 @@ def next_slot_info(now: datetime) -> tuple[str, int]:
     mins = max(0, int((nxt - now).total_seconds() // 60))
     return nxt.strftime("%H:%M"), mins
 
+# ----- helper cho /top: token trong khung, giá in đậm, bỏ funding -----
+def _fmt_top_line(c: dict, unit: str) -> str:
+    sym = c["symbol"].replace("_USDT", "")
+    # giá
+    if unit == "VND":
+        price = f"{c['lastPriceVND']:,}₫".replace(",", ".")
+    else:
+        price = f"{c['lastPrice']:.4f} USDT".rstrip("0").rstrip(".")
+    # Δ24h + mũi tên
+    chg = float(c.get("change24h_pct", 0.0))
+    arrow = "🟢" if chg > 0 else ("🔴" if chg < 0 else "⚪")
+    chg_s = f"{arrow} {chg:+.2f}%"
+    # dòng hiển thị đẹp (HTML)
+    return f"<code>[ {sym} ]</code>  <b>{price}</b>   Δ24h = {chg_s}"
+
 # ------------- commands -------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
@@ -55,26 +70,36 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
 
+# ----- /status: chỉ nguồn & trạng thái, không hiển thị VND -----
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
-    coins, live, rate = top_symbols(unit=_current_unit, topn=5)
-    status = "LIVE ✅" if live else "DOWN ❌"
-    rate_txt = f"{int(rate):,}₫/USDT".replace(",", ".")
-    await update.effective_chat.send_message(f"Trạng thái dữ liệu: {status}\nTỷ giá: ~{rate_txt}")
+    # probe nhanh 1 mã để biết trạng thái dữ liệu
+    _, live, _ = top_symbols(unit="USD", topn=1)
+    text = (
+        "📡 Trạng thái dữ liệu\n"
+        "• Nguồn: MEXC Futures\n"
+        f"• Trạng thái: {'LIVE ✅' if live else 'DOWN ❌'}\n"
+    )
+    await update.effective_chat.send_message(text)
 
+# ----- /top: gọn, dễ đọc, bỏ funding & LIVE -----
 async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
     coins, live, rate = top_symbols(unit=_current_unit, topn=30)
-    if not live or not coins:
-        await update.effective_chat.send_message("⚠️ Hiện không có dữ liệu LIVE. Thử lại sau nhé.")
+    if not coins:
+        await update.effective_chat.send_message("⚠️ Hiện không có dữ liệu. Thử lại sau nhé.")
         return
-    head = f"📊 Top 30 Futures (MEXC) — Đơn vị: **{_current_unit}** — LIVE ✅"
-    lines = [head]
-    for i, c in enumerate(coins, 1):
-        px = (f"{c['lastPriceVND']:,}₫".replace(",", ".") if _current_unit=="VND"
-              else f"{c['lastPrice']:.4f} USDT".rstrip("0").rstrip("."))
-        lines.append(f"{i:02d}. {c['symbol'].replace('_USDT','')} • {px} • Δ24h={c['change24h_pct']:.2f}% • f={c.get('fundingRate',0):+.3f}%")
-    await update.effective_chat.send_message("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+    head = f"📊 Top 30 Futures (MEXC) — Đơn vị: {_current_unit}"
+    lines = [head, ""]
+    for c in coins:
+        lines.append(_fmt_top_line(c, _current_unit))
+
+    await update.effective_chat.send_message(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True
+    )
 
 # ------------- scheduled jobs -------------
 async def morning_brief(context: ContextTypes.DEFAULT_TYPE):
@@ -98,9 +123,8 @@ async def morning_brief(context: ContextTypes.DEFAULT_TYPE):
 
     lines = []
     lines.append("Chào buổi sáng nhé anh Trương ☀️")
-    lines.append(f"Hôm nay: {wd}, {now.strftime('%H:%M %d/%m/%Y')} • Tỷ giá: ~{int(rate):,}₫/USDT".replace(",", "."))
-    tilt = "LONG" if long_pct >= short_pct else "SHORT"
-    lines.append(f"\nThị trường: nghiêng về {tilt} (Long {long_pct}% | Short {short_pct}%)")
+    lines.append(f"Hôm nay: {wd}, {now.strftime('%H:%M %d/%m/%Y')}")
+    lines.append("\nThị trường: nghiêng về " + ("LONG" if long_pct >= short_pct else "SHORT") + f" (Long {long_pct}% | Short {short_pct}%)")
     lines.append("• Tín hiệu tổng hợp: funding nhìn chung cân bằng, dòng tiền tập trung mid-cap.")
 
     if gainers:
@@ -109,8 +133,7 @@ async def morning_brief(context: ContextTypes.DEFAULT_TYPE):
             sym = c["symbol"].replace("_USDT","")
             chg = c.get("change24h_pct", 0.0)
             vol = c.get("volumeQuote", 0.0)
-            fr  = c.get("fundingRate", 0.0)
-            lines.append(f"{i}) {sym} • {chg:+.1f}% • VolQ ~ {vol:,.0f} USDT • f={fr:+.3f}%".replace(",", "."))
+            lines.append(f"{i}) {sym} • {chg:+.1f}% • VolQ ~ {vol:,.0f} USDT".replace(",", "."))
     else:
         lines.append("\nHôm nay biên độ thấp, ưu tiên quản trị rủi ro.")
 
