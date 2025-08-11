@@ -10,33 +10,28 @@ from settings import (
 _session = requests.Session()
 _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124 Safari/537.36"}
 
-_last_fx = {"ts": 0.0, "rate": 24500.0}  # fallback
-_prev_volume: Dict[str, float] = {}      # để tính volume spike
+_last_fx = {"ts": 0.0, "rate": 24500.0}  # fallback khi chưa lấy được tỷ giá
+_prev_volume: Dict[str, float] = {}      # để tính volume spike highlight
 
-# ========= Formatter (kiểu ONUS & USD) =========
-def fmt_vnd_onus(x: float) -> str:
-    """
-    Kiểu ONUS (theo ảnh bạn gửi):
-    - Nghìn dùng dấu ',' ; thập phân dùng '.'
-    - Nếu x >= 1: tối đa 2 số thập phân, bỏ .00
-    - Nếu x < 1: giữ chi tiết 4–6 số thập phân
-    - Không thêm ký hiệu ₫
-    """
+# ========= Formatter =========
+def fmt_vnd_price(x: float) -> str:
+    """VND: >=1 -> số nguyên; <1 -> 4 chữ số thập phân (không ký hiệu ₫)."""
     if x >= 1:
-        s = f"{x:,.2f}"
-        if s.endswith(".00"):
-            s = s[:-3]
-        s = s.rstrip("0").rstrip(".")
-        return s
-    s = f"{x:.6f}".rstrip("0").rstrip(".")
-    if s == "0":
-        s = "0.0001"
-    return s
+        return f"{int(round(x)):,.0f}"
+    return f"{x:.4f}"
 
-def fmt_usd(x: float) -> str:
-    s = f"{x:,.4f}".rstrip("0").rstrip(".")
-    return s
-# ===============================================
+def fmt_vnd_amount(x: float) -> str:
+    """Khối lượng/giá trị quy đổi VND: luôn số nguyên có nhóm nghìn + ' VND'."""
+    return f"{int(round(x)):,.0f} VND"
+
+def fmt_usd_price(x: float) -> str:
+    """USD: có nhóm nghìn, tối đa 4 chữ số thập phân (tự cắt đuôi 0)."""
+    return f"{x:,.4f}".rstrip("0").rstrip(".")
+
+def fmt_usd_amount_int(x: float) -> str:
+    """Khối lượng USDT: số nguyên có nhóm nghìn + ' USDT'."""
+    return f"{int(round(x)):,.0f} USDT"
+# =============================
 
 def _get_json(url: str):
     for _ in range(max(1, HTTP_RETRY)):
@@ -169,20 +164,20 @@ def pick_scalping_signals(unit: str, n_scalp=5):
             px = c["lastPriceVND"]
             tp = px * (1.006 if side == "LONG" else 0.994)
             sl = px * (0.992 if side == "LONG" else 1.008)
-            entry = fmt_vnd_onus(px)
-            tp_s  = fmt_vnd_onus(tp)
-            sl_s  = fmt_vnd_onus(sl)
+            entry = fmt_vnd_price(px)
+            tp_s  = fmt_vnd_price(tp)
+            sl_s  = fmt_vnd_price(sl)
             unit_tag = "VND"
-            volq = fmt_vnd_onus(c["volumeValueVND"]) + " VND"
+            volq = fmt_vnd_amount(c["volumeValueVND"])
         else:
             px = c["lastPrice"]
             tp = px * (1.006 if side == "LONG" else 0.994)
             sl = px * (0.992 if side == "LONG" else 1.008)
-            entry = fmt_usd(px) + " USDT"
-            tp_s  = fmt_usd(tp) + " USDT"
-            sl_s  = fmt_usd(sl) + " USDT"
+            entry = fmt_usd_price(px) + " USDT"
+            tp_s  = fmt_usd_price(tp) + " USDT"
+            sl_s  = fmt_usd_price(sl) + " USDT"
             unit_tag = "USD"
-            volq = f"{c['volumeQuote']:,.0f} USDT"
+            volq = fmt_usd_amount_int(c["volumeQuote"])
 
         reason = f"Funding={funding:+.3f}%, VolQ≈{volq}, Δ24h={change:+.2f}%"
         signals.append({
