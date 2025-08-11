@@ -1,10 +1,24 @@
 # -*- coding: utf-8 -*-
-import asyncio, traceback
-from datetime import datetime, timedelta, time as dt_time
+"""
+Telegram bot — autiner (bản PRO, lý do theo MA/RSI)
+Menu:
+  H1: 🔎 Trạng thái | 🟢/🔴 Auto ON/OFF
+  H2: 📅 Hôm nay | 📅 Ngày mai
+  H3: 📅 Cả tuần | 📜 Lịch vạn niên
+  H4: 💱 Đơn vị USD/VND | 🧪 Test
+Slot: 06:15 → 21:45 (30’), countdown 60s.
+"""
+
+from __future__ import annotations
+import asyncio
+from datetime import datetime, timedelta, time as dt_time, date as dt_date
 import pytz
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    Application, ApplicationBuilder, CommandHandler,
+    MessageHandler, ContextTypes, filters
+)
 
 from settings import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, TZ_NAME,
@@ -13,17 +27,30 @@ from settings import (
 )
 from .mexc_api import smart_pick_signals, market_snapshot
 
-# ====== state ======
+# Lịch âm (tuỳ chọn)
+try:
+    from lunardate import LunarDate
+    HAS_LUNAR = True
+except Exception:
+    HAS_LUNAR = False
+
 VN_TZ = pytz.timezone(TZ_NAME)
-_current_unit = DEFAULT_UNIT if DEFAULT_UNIT in ("VND","USD") else "VND"
+_current_unit = DEFAULT_UNIT if DEFAULT_UNIT in ("VND", "USD") else "VND"
 _auto_on = True
 
-# ====== helpers ======
+# ===== Helpers =====
 def guard(update: Update) -> bool:
     return not (ALLOWED_USER_ID and update.effective_user and update.effective_user.id != ALLOWED_USER_ID)
 
+def vn_now() -> datetime:
+    return datetime.now(VN_TZ)
+
 def vn_now_str() -> str:
-    return datetime.now(VN_TZ).strftime("%H:%M %d/%m/%Y")
+    return vn_now().strftime("%H:%M %d/%m/%Y")
+
+def weekday_vi(dt: datetime | dt_date) -> str:
+    names = ["Thứ Hai","Thứ Ba","Thứ Tư","Thứ Năm","Thứ Sáu","Thứ Bảy","Chủ Nhật"]
+    return names[dt.weekday()]
 
 def next_slot_info(now: datetime) -> tuple[str, int]:
     today = now.date()
@@ -32,175 +59,226 @@ def next_slot_info(now: datetime) -> tuple[str, int]:
         h, m = map(int, hhmm.split(":"))
         slots.append(VN_TZ.localize(datetime.combine(today, dt_time(h, m))))
     future = [s for s in slots if s > now]
-    nxt = future[0] if future else VN_TZ.localize(datetime.combine(today + timedelta(days=1), dt_time(*map(int, SLOT_TIMES[0].split(":")))))
+    if future:
+        nxt = future[0]
+    else:
+        h, m = map(int, SLOT_TIMES[0].split(":"))
+        nxt = VN_TZ.localize(datetime.combine(today + timedelta(days=1), dt_time(h, m)))
     mins = max(0, int((nxt - now).total_seconds() // 60))
     return nxt.strftime("%H:%M"), mins
 
-# ====== keyboard ======
-def _status_btn_text() -> str:
-    return f"🔎 Trạng thái ({'ON' if _auto_on else 'OFF'})"
+# ===== Menu =====
+BTN_STATUS     = "🔎 Trạng thái"
+BTN_AUTO       = "🟢 Auto ON / 🔴 Auto OFF"
+BTN_TODAY      = "📅 Hôm nay"
+BTN_TOMORROW   = "📅 Ngày mai"
+BTN_WEEK       = "📅 Cả tuần"
+BTN_LUNAR      = "📜 Lịch vạn niên"
+BTN_UNIT       = "💱 Đơn vị: USD/VND"
+BTN_TEST       = "🧪 Test"
 
-def _auto_btn_text() -> str:
-    return "🟢 Auto ON" if not _auto_on else "🔴 Auto OFF"
-
-def _kbd() -> ReplyKeyboardMarkup:
-    kb = [
-        [_status_btn_text(), "🧪 Test"],
-        ["📅 Hôm nay", "📅 Ngày mai"],
-        ["📅 Cả tuần", "💰 MEXC VND"],
-        ["💵 MEXC USD", _auto_btn_text()],
+def main_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [BTN_STATUS, BTN_AUTO],
+        [BTN_TODAY, BTN_TOMORROW],
+        [BTN_WEEK, BTN_LUNAR],
+        [BTN_UNIT, BTN_TEST],
     ]
-    return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-# ====== handlers ======
+# ===== Commands =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
-    await update.effective_chat.send_message("Chọn thao tác bên dưới.", reply_markup=_kbd())
+    await update.effective_chat.send_message(
+        "AUTINER đã sẵn sàng. Chọn từ menu bên dưới nhé.",
+        reply_markup=main_keyboard()
+    )
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
     _, live, _ = market_snapshot(unit="USD", topn=1)
-    text = (
-        "📡 Trạng thái bot\n"
-        f"• Nguồn: MEXC Futures\n"
-        f"• Auto tín hiệu: {'ON 🟢' if _auto_on else 'OFF 🔴'}\n"
+    await update.effective_chat.send_message(
+        f"📡 Trạng thái dữ liệu: {'LIVE ✅' if live else 'DOWN ❌'}\n"
         f"• Đơn vị hiện tại: {_current_unit}\n"
-        f"• Dữ liệu: {'LIVE ✅' if live else 'DOWN ❌'}"
+        f"• Auto: {'ON' if _auto_on else 'OFF'}",
     )
-    await update.effective_chat.send_message(text, reply_markup=_kbd())
 
-async def _toggle_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== Lịch vạn niên =====
+def _lunar_line(d: dt_date) -> str:
+    if not HAS_LUNAR:
+        return "• (Chưa cài 'lunardate' — thêm 'lunardate==0.2.0' vào requirements.txt để xem Âm lịch)"
+    ld = LunarDate.fromSolarDate(d.year, d.month, d.day)
+    return f"Âm lịch: {ld.day}/{ld.month}/{ld.year} (AL)"
+
+async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not guard(update): return
+    now = vn_now()
+    text = f"📅 Hôm nay: {weekday_vi(now)}, {now.strftime('%d/%m/%Y')}\n{_lunar_line(now.date())}"
+    await update.effective_chat.send_message(text)
+
+async def tomorrow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not guard(update): return
+    tm = vn_now() + timedelta(days=1)
+    text = f"📅 Ngày mai: {weekday_vi(tm)}, {tm.strftime('%d/%m/%Y')}\n{_lunar_line(tm.date())}"
+    await update.effective_chat.send_message(text)
+
+async def week_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not guard(update): return
+    base = vn_now().date()
+    lines = ["📅 Cả tuần:"]
+    # tuần hiện tại, bắt đầu Thứ Hai
+    start = base - timedelta(days=base.weekday())
+    for i in range(7):
+        d = start + timedelta(days=i)
+        lines.append(f"- {weekday_vi(d)}, {d.strftime('%d/%m/%Y')} — {_lunar_line(d)}")
+    await update.effective_chat.send_message("\n".join(lines))
+
+async def lunar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not guard(update): return
+    msg = (
+        "📜 Lịch vạn niên\n"
+        "• Bấm '📅 Hôm nay' hoặc '📅 Ngày mai' để xem nhanh.\n"
+        "• Hoặc nhắn: lich dd/mm/yyyy (ví dụ: lich 12/08/2025)."
+    )
+    await update.effective_chat.send_message(msg)
+
+# ===== Toggle =====
+async def toggle_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not guard(update): return
     global _auto_on
     _auto_on = not _auto_on
-    msg = "✅ ĐÃ BẬT gửi tín hiệu tự động (mỗi 30’)." if _auto_on else "⛔ ĐÃ TẮT gửi tín hiệu tự động."
-    await update.effective_chat.send_message(msg, reply_markup=_kbd())
+    await update.effective_chat.send_message(
+        f"⚙️ Auto tín hiệu: {'🟢 ON' if _auto_on else '🔴 OFF'}",
+        reply_markup=main_keyboard()
+    )
 
-async def set_unit_vnd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def toggle_unit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not guard(update): return
     global _current_unit
-    _current_unit = "VND"
-    await update.effective_chat.send_message("✅ Đã chuyển đơn vị sang VND.", reply_markup=_kbd())
+    _current_unit = "USD" if _current_unit == "VND" else "VND"
+    await update.effective_chat.send_message(
+        f"💱 Đã chuyển đơn vị sang: **{_current_unit}**",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard()
+    )
 
-async def set_unit_usd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global _current_unit
-    _current_unit = "USD"
-    await update.effective_chat.send_message("✅ Đã chuyển đơn vị sang USD.", reply_markup=_kbd())
-
-async def macro_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_chat.send_message("📅 Lịch vĩ mô hôm nay: (đang rút gọn).", reply_markup=_kbd())
-
-async def macro_tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_chat.send_message("📅 Lịch vĩ mô ngày mai: (đang rút gọn).", reply_markup=_kbd())
-
-async def macro_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_chat.send_message("📅 Lịch vĩ mô cả tuần: (đang rút gọn).", reply_markup=_kbd())
-
-# ====== jobs ======
+# ===== Countdown =====
 async def pre_countdown(context: ContextTypes.DEFAULT_TYPE):
-    if not _auto_on: return
+    if not _auto_on:
+        return
     chat_id = ALLOWED_USER_ID
-    try:
-        msg = await context.bot.send_message(chat_id, "⏳ Tín hiệu 30’ tiếp theo — còn 60s")
-        for sec in range(59, -1, -1):
+    msg = await context.bot.send_message(chat_id, "⏳ Tín hiệu 30’ **tiếp theo** — còn 60s", parse_mode=ParseMode.MARKDOWN)
+    for sec in range(59, -1, -1):
+        try:
             await asyncio.sleep(1)
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=chat_id, message_id=msg.message_id,
-                    text=f"⏳ Tín hiệu 30’ tiếp theo — còn {sec:02d}s"
-                )
-            except Exception:
-                pass
-    except Exception as e:
-        print("[COUNTDOWN_ERROR]", e)
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=msg.message_id,
+                text=f"⏳ Tín hiệu 30’ **tiếp theo** — còn {sec:02d}s",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception:
+            break
 
+# ===== Batch tín hiệu =====
 async def send_batch_scalping(context: ContextTypes.DEFAULT_TYPE):
-    if not _auto_on: 
+    if not _auto_on:
         return
     chat_id = ALLOWED_USER_ID
     try:
         signals, highlights, live, rate = smart_pick_signals(_current_unit, NUM_SCALPING)
-
-        if (not live) or (not signals):
-            now = datetime.now(VN_TZ)
-            nxt_hhmm, mins = next_slot_info(now)
-            await context.bot.send_message(
-                chat_id,
-                f"⚠️ Hệ thống đang gặp sự cố nên **slot {now.strftime('%H:%M')}** không có tín hiệu.\n"
-                f"↪️ Dự kiến hoạt động lại vào slot **{nxt_hhmm}** (khoảng {mins} phút nữa).",
-                reply_markup=_kbd()
-            )
-            return
-
-        header = f"📌 Tín hiệu {NUM_SCALPING} lệnh (Scalping) — {vn_now_str()}"
-        if highlights:
-            header += "\n⭐ Tín hiệu nổi bật: " + " | ".join(highlights[:3])
-        await context.bot.send_message(chat_id, header)
-
-        for s in signals:
-            msg = (
-                f"📈 {s['token']} ({s['unit']}) — {'🟩' if s['side']=='LONG' else '🟥'} {s['side']}\n\n"
-                f"🟢 Loại lệnh: {s['type']}\n"
-                f"🔹 Kiểu vào lệnh: {s['orderType']}\n"
-                f"💰 Entry: {s['entry']}\n"
-                f"🎯 TP: {s['tp']}\n"
-                f"🛡️ SL: {s['sl']}\n"
-                f"📊 Độ mạnh: {s['strength']}%\n"
-                f"📌 Lý do: {s['reason']}\n"
-                f"🕒 Thời gian: {vn_now_str()}"
-            )
-            await context.bot.send_message(chat_id, msg)
-
     except Exception as e:
-        tb = traceback.format_exc()
-        print("[SEND_BATCH_ERROR]\n", tb)
+        await context.bot.send_message(chat_id, f"⚠️ Lỗi tạo tín hiệu: {e}")
+        return
+
+    if (not live) or (not signals):
+        now = vn_now()
+        nxt_hhmm, mins = next_slot_info(now)
         await context.bot.send_message(
             chat_id,
-            f"🚨 Lỗi nội bộ khi tạo tín hiệu: {e.__class__.__name__}: {e}\n→ Mình sẽ thử lại ở slot kế tiếp.",
-            reply_markup=_kbd()
+            f"⚠️ Slot {now.strftime('%H:%M')} không có dữ liệu đủ/kịp để tạo tín hiệu.\n"
+            f"↪️ Dự kiến slot kế tiếp **{nxt_hhmm}** (~{mins}’)."
         )
+        return
 
-# Health monitor
+    header = f"📌 Tín hiệu {len(signals)} lệnh (Scalping) — {vn_now_str()}"
+    await context.bot.send_message(chat_id, header)
+
+    for s in signals:
+        side_icon = '🟩' if s['side']=='LONG' else '🟥'
+        msg = (
+            f"📈 {s['token']} ({s['unit']}) — {side_icon} {s['side']} | Chiến lược: {s['orderType'].upper()}\n\n"
+            f"💰 Entry: {s['entry']}\n"
+            f"🎯 TP: {s['tp']}    🛡️ SL: {s['sl']}\n"
+            f"📊 Độ mạnh: {s['strength']}%  |  Khung: 1–5m\n"
+            f"📌 Lý do (MA/RSI):\n{s['reason']}\n"
+            f"🕒 {vn_now_str()}"
+        )
+        await context.bot.send_message(chat_id, msg)
+
+# ===== Health monitor =====
 async def health_probe(context: ContextTypes.DEFAULT_TYPE):
+    if not _auto_on:
+        return
     chat_id = ALLOWED_USER_ID
     try:
         coins, live, _ = market_snapshot(unit="USD", topn=1)
         if not live or not coins:
-            now = datetime.now(VN_TZ)
+            now = vn_now()
             nxt_hhmm, mins = next_slot_info(now)
             await context.bot.send_message(
                 chat_id,
-                f"🚨 Cảnh báo kết nối: nguồn dữ liệu đang DOWN lúc {now.strftime('%H:%M')}.\n"
-                f"↪️ Slot kế tiếp: **{nxt_hhmm}** (~{mins}p)."
+                f"🚨 Dữ liệu MEXC chậm hoặc gián đoạn lúc {now.strftime('%H:%M')}.\n"
+                f"↪️ Sẽ thử lại trước slot **{nxt_hhmm}** (~{mins}’)."
             )
-    except Exception as e:
-        print("[HEALTH_PROBE_ERROR]", e)
+    except Exception:
+        pass
 
-# ====== build app ======
+# ===== Text router =====
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not guard(update): return
+    txt = (update.message.text or "").strip()
+    if txt == BTN_STATUS:
+        return await status_cmd(update, context)
+    if txt == BTN_AUTO:
+        return await toggle_auto(update, context)
+    if txt == BTN_TODAY:
+        return await today_cmd(update, context)
+    if txt == BTN_TOMORROW:
+        return await tomorrow_cmd(update, context)
+    if txt == BTN_WEEK:
+        return await week_cmd(update, context)
+    if txt == BTN_LUNAR:
+        return await lunar_menu(update, context)
+    if txt == BTN_UNIT:
+        return await toggle_unit(update, context)
+
+    t = txt.lower()
+    if t.startswith("lich "):
+        try:
+            dd, mm, yy = t.split(" ")[1].split("/")
+            d = dt_date(int(yy), int(mm), int(dd))
+            msg = f"📅 {weekday_vi(d)}, {d.strftime('%d/%m/%Y')}\n{_lunar_line(d)}"
+        except Exception:
+            msg = "❗ Cú pháp: lich dd/mm/yyyy (ví dụ: lich 12/08/2025)"
+        return await update.effective_chat.send_message(msg)
+
+    await update.effective_chat.send_message("Mời chọn từ menu bên dưới.", reply_markup=main_keyboard())
+
+# ===== Build app & schedule =====
 def build_app() -> Application:
     app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), on_text))
 
-    # reply-keyboard actions
-    app.add_handler(MessageHandler(filters.Regex(r"^(🟢 Auto ON|🔴 Auto OFF)$"), _toggle_auto))
-    app.add_handler(MessageHandler(filters.Regex(r"^🔎 Trạng thái"), status_cmd))
-    app.add_handler(MessageHandler(filters.Regex(r"^💰 MEXC VND$"), set_unit_vnd))
-    app.add_handler(MessageHandler(filters.Regex(r"^💵 MEXC USD$"), set_unit_usd))
-    app.add_handler(MessageHandler(filters.Regex(r"^🧪 Test$"), send_batch_scalping))
-    app.add_handler(MessageHandler(filters.Regex(r"^📅 Hôm nay$"), macro_today))
-    app.add_handler(MessageHandler(filters.Regex(r"^📅 Ngày mai$"), macro_tomorrow))
-    app.add_handler(MessageHandler(filters.Regex(r"^📅 Cả tuần$"), macro_week))
-
-    # schedule 30'
+    j = app.job_queue
     for hhmm in SLOT_TIMES:
         h, m = map(int, hhmm.split(":"))
-        # countdown trước 60s
         mm = (m - 1) % 60
         hh = h if m > 0 else (h - 1)
-        app.job_queue.run_daily(pre_countdown,       time=dt_time(hh, mm, tzinfo=VN_TZ))
-        app.job_queue.run_daily(send_batch_scalping, time=dt_time(h,  m,  tzinfo=VN_TZ))
+        j.run_daily(pre_countdown,       time=dt_time(hh, mm, tzinfo=VN_TZ))
+        j.run_daily(send_batch_scalping, time=dt_time(h,  m, tzinfo=VN_TZ))
 
-    # health probe
-    app.job_queue.run_repeating(health_probe, interval=HEALTH_POLL_SEC, first=10)
+    j.run_repeating(health_probe, interval=HEALTH_POLL_SEC, first=10)
     return app
