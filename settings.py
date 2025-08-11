@@ -22,11 +22,11 @@ SLOT_TIMES = [
     "14:15","14:45","15:15","15:45","16:15","16:45","17:15","17:45",
     "18:15","18:45","19:15","19:45","20:15","20:45","21:15","21:45",
 ]
+
 # Scalping-only
 NUM_SCALPING = 5
-NUM_SWING = 0
 
-# MEXC Futures API
+# MEXC Futures API (public)
 MEXC_TICKER_URL = "https://contract.mexc.com/api/v1/contract/ticker"
 MEXC_FUNDING_URL = "https://contract.mexc.com/api/v1/contract/funding_rate/last-rate"
 HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "10"))
@@ -36,6 +36,10 @@ HTTP_RETRY = int(os.getenv("HTTP_RETRY", "2"))
 USDVND_URL = "https://api.exchangerate.host/latest?base=USD&symbols=VND"
 FX_CACHE_TTL = int(os.getenv("FX_CACHE_TTL", "1800"))  # 30 phút
 
-# Ngưỡng “tín hiệu khẩn” (đang dùng cho highlight trong batch)
+# Ngưỡng “tín hiệu khẩn” (dùng cho highlight trong batch)
 ALERT_FUNDING_ABS = float(os.getenv("ALERT_FUNDING_ABS", "0.05"))  # 5% (0.05)
 ALERT_VOLUME_SPIKE = float(os.getenv("ALERT_VOLUME_SPIKE", "2.0")) # x2
+
+# Cảnh báo sự cố & monitor
+FAIL_ALERT_COOLDOWN_SEC = int(os.getenv("FAIL_ALERT_COOLDOWN_SEC", "300"))  # 5'
+HEALTH_POLL_SEC = int(os.getenv("HEALTH_POLL_SEC", "60"))                  # 60s
