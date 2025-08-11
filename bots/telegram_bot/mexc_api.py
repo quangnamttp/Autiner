@@ -23,9 +23,6 @@ _prev_volume: Dict[str, float] = {}     # symbol -> last quote volume (USDT)
 _hist_px: Dict[str, deque]  = {}        # symbol -> deque of last USD prices (3 slots ~ 90m)
 _last_batch: set[str] = set()           # symbols picked last batch
 
-# ===== Auto denomination (giống ONUS) =====
-from .denom import auto_denom
-
 # ===== SAFE DEFAULTS nếu settings.py thiếu các núm chỉnh =====
 try:
     from settings import (
@@ -41,6 +38,28 @@ except Exception:
     MIN_ABS_R30_PCT = 0.25
     SAME_PRICE_EPS = 0.0005
     REPEAT_BONUS_DELTA = 0.40
+
+# ===== Auto-denomination (gộp vào file này, KHÔNG cần denom.py) =====
+def auto_denom(symbol: str, last_usd: float, vnd_rate: float) -> Tuple[str, float, float]:
+    """
+    Trả về (display_symbol, adjusted_usd_price, multiplier)
+    - Nếu giá VND quá nhỏ -> nhân 1_000 hoặc 1_000_000 để dễ đọc (như ONUS)
+    - Thêm hậu tố 1000/1M vào tên hiển thị
+    """
+    base_vnd = (last_usd or 0.0) * (vnd_rate or 0.0)
+    root = symbol.replace("_USDT", "")
+
+    if base_vnd < 0.001:
+        mul = 1_000_000.0
+        disp = f"{root}1M"
+    elif base_vnd < 1.0:
+        mul = 1_000.0
+        disp = f"{root}1000"
+    else:
+        mul = 1.0
+        disp = root
+
+    return disp, (last_usd or 0.0) * mul, mul
 
 # ====== Formatter ======
 def fmt_price_vnd(p: float) -> str:
@@ -254,7 +273,7 @@ def _side_from_momo_funding(r30: float, change24h: float, funding: float) -> str
     return "LONG" if change24h >= 0 else "SHORT"
 
 def smart_pick_signals(unit: str, n_scalp=5):
-    # QUAN TRỌNG: dùng global trước khi truy cập/ghi
+    # Dùng global TRƯỚC khi truy cập/ghi
     global _last_batch, _prev_volume
 
     coins, live, rate = market_snapshot(unit="USD", topn=DIVERSITY_POOL_TOPN)  # nền USD để tính động lượng nhất quán
@@ -343,7 +362,7 @@ def smart_pick_signals(unit: str, n_scalp=5):
             unit_tag = "USD"
             volq = fmt_amount_int(c.get("volumeQuote", 0.0), "USDT")
 
-        token = disp  # tên sau auto-denom (vd: PEPE1000, SHIB1000, PUMP, ...)
+        token = disp  # tên sau auto-denom (vd: PEPE1000, SHIB1000, ...)
         accel = max(0.0, r30 - 0.5*r60)
         reason = f"r30={r30:+.2f}%, accel={accel:+.2f}%, funding={funding:+.3f}%, VolQ≈{volq}"
 
