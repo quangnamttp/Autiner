@@ -6,9 +6,8 @@ Menu:
   H2: 📅 Hôm nay | 📅 Ngày mai
   H3: 📅 Cả tuần | 📜 Lịch vạn niên
   H4: 💰 MEXC VND / 💵 MEXC USD (đổi nhãn theo đơn vị) | 🧪 Test
-Slot: 06:15 → 21:45 (30’), countdown 60s.
+Slot: 06:15 → 21:45 (30’), countdown 60s (cập nhật mỗi 3 giây để né rate-limit).
 """
-
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, time as dt_time, date as dt_date
@@ -26,10 +25,11 @@ from settings import (
     DEFAULT_UNIT
 )
 from .mexc_api import smart_pick_signals, market_snapshot
+from .lunar_calendar import calendar_month_html
 
-# Lịch âm (tuỳ chọn)
+# Lịch âm (tuỳ chọn hiển thị riêng tại mục Lịch vạn niên)
 try:
-    from lunardate import LunarDate
+    from lunardate import LunarDate  # chỉ để kiểm tra có lib hay chưa
     HAS_LUNAR = True
 except Exception:
     HAS_LUNAR = False
@@ -48,7 +48,7 @@ def vn_now() -> datetime:
 def vn_now_str() -> str:
     return vn_now().strftime("%H:%M %d/%m/%Y")
 
-def weekday_vi(dt: datetime | dt_date) -> str:
+def weekday_vi(dt) -> str:
     names = ["Thứ Hai","Thứ Ba","Thứ Tư","Thứ Năm","Thứ Sáu","Thứ Bảy","Chủ Nhật"]
     return names[dt.weekday()]
 
@@ -67,7 +67,7 @@ def next_slot_info(now: datetime) -> tuple[str, int]:
     mins = max(0, int((nxt - now).total_seconds() // 60))
     return nxt.strftime("%H:%M"), mins
 
-# ===== Nhãn nút tĩnh (không phụ thuộc trạng thái) =====
+# ===== Nhãn tĩnh =====
 BTN_STATUS   = "🔎 Trạng thái"
 BTN_TODAY    = "📅 Hôm nay"
 BTN_TOMORROW = "📅 Ngày mai"
@@ -105,43 +105,37 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard()
     )
 
-# ===== Lịch vạn niên =====
-def _lunar_line(d: dt_date) -> str:
-    if not HAS_LUNAR:
-        return "• (Chưa cài 'lunardate' — thêm 'lunardate==0.2.0' vào requirements.txt để xem Âm lịch)"
-    ld = LunarDate.fromSolarDate(d.year, d.month, d.day)
-    return f"Âm lịch: {ld.day}/{ld.month}/{ld.year} (AL)"
-
+# ===== Lịch (vĩ mô: placeholders) =====
 async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
     now = vn_now()
-    text = f"📅 Hôm nay: {weekday_vi(now)}, {now.strftime('%d/%m/%Y')}\n{_lunar_line(now.date())}"
+    text = (
+        f"📅 Hôm nay: {weekday_vi(now)}, {now.strftime('%d/%m/%Y')}\n"
+        "• Lịch vĩ mô: (chưa kết nối nguồn — sẽ bổ sung sau)."
+    )
     await update.effective_chat.send_message(text, reply_markup=main_keyboard())
 
 async def tomorrow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
     tm = vn_now() + timedelta(days=1)
-    text = f"📅 Ngày mai: {weekday_vi(tm)}, {tm.strftime('%d/%m/%Y')}\n{_lunar_line(tm.date())}"
+    text = (
+        f"📅 Ngày mai: {weekday_vi(tm)}, {tm.strftime('%d/%m/%Y')}\n"
+        "• Lịch vĩ mô: (chưa kết nối nguồn — sẽ bổ sung sau)."
+    )
     await update.effective_chat.send_message(text, reply_markup=main_keyboard())
 
 async def week_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
     base = vn_now().date()
-    lines = ["📅 Cả tuần:"]
-    start = base - timedelta(days=base.weekday())  # Thứ Hai
-    for i in range(7):
-        d = start + timedelta(days=i)
-        lines.append(f"- {weekday_vi(d)}, {d.strftime('%d/%m/%Y')} — {_lunar_line(d)}")
+    lines = ["📅 Cả tuần (vĩ mô):", "• Chưa kết nối nguồn — sẽ bổ sung sau."]
     await update.effective_chat.send_message("\n".join(lines), reply_markup=main_keyboard())
 
+# ===== Lịch vạn niên (âm/dương) =====
 async def lunar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
-    msg = (
-        "📜 Lịch vạn niên\n"
-        "• Bấm '📅 Hôm nay' hoặc '📅 Ngày mai' để xem nhanh.\n"
-        "• Hoặc nhắn: lich dd/mm/yyyy (ví dụ: lich 12/08/2025)."
-    )
-    await update.effective_chat.send_message(msg, reply_markup=main_keyboard())
+    d = vn_now().date()
+    html = calendar_month_html(d)
+    await update.effective_chat.send_message(html, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 
 # ===== Toggle =====
 async def toggle_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -163,21 +157,28 @@ async def toggle_unit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard()
     )
 
-# ===== Countdown trước slot =====
+# ===== Countdown (cập nhật 3 giây/lần để né rate limit) =====
 async def pre_countdown(context: ContextTypes.DEFAULT_TYPE):
     if not _auto_on:
         return
     chat_id = ALLOWED_USER_ID
-    msg = await context.bot.send_message(chat_id, "⏳ Tín hiệu 30’ **tiếp theo** — còn 60s", parse_mode=ParseMode.MARKDOWN)
-    for sec in range(59, -1, -1):
+    msg = await context.bot.send_message(
+        chat_id,
+        "⏳ Tín hiệu 30’ **tiếp theo** — còn 60s",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    # update mỗi 3s -> 20 lần/số 60s
+    for sec in range(57, -1, -3):
         try:
-            await asyncio.sleep(1)
+            await asyncio.sleep(3)
+            left = max(0, sec)
             await context.bot.edit_message_text(
                 chat_id=chat_id, message_id=msg.message_id,
-                text=f"⏳ Tín hiệu 30’ **tiếp theo** — còn {sec:02d}s",
+                text=f"⏳ Tín hiệu 30’ **tiếp theo** — còn {left:02d}s",
                 parse_mode=ParseMode.MARKDOWN
             )
         except Exception:
+            # nếu Telegram chặn tần suất -> dừng để tránh treo
             break
 
 # ===== Batch tín hiệu =====
@@ -240,9 +241,8 @@ async def health_probe(context: ContextTypes.DEFAULT_TYPE):
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
     txt = (update.message.text or "").strip()
-
-    # Bắt theo từ khoá để nhãn có đổi vẫn hoạt động
     low = txt.lower()
+
     if "trạng thái" in low:
         return await status_cmd(update, context)
     if "auto" in low:
@@ -258,15 +258,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "mexc" in low or "đơn vị" in low or "usd" in low or "vnd" in low:
         return await toggle_unit(update, context)
     if low.startswith("lich "):
+        # hỗ trợ: "lich mm/yyyy" để xem lịch tháng đó
         try:
-            # lich dd/mm/yyyy
-            _, dstr = low.split(" ", 1)
-            dd, mm, yy = dstr.split("/")
-            d = dt_date(int(yy), int(mm), int(dd))
-            msg = f"📅 {weekday_vi(d)}, {d.strftime('%d/%m/%Y')}\n{_lunar_line(d)}"
+            _, mmyy = low.split(" ", 1)
+            mm, yy = mmyy.split("/")
+            from datetime import date as dt_date
+            d = dt_date(int(yy), int(mm), 1)
+            html = calendar_month_html(d)
         except Exception:
-            msg = "❗ Cú pháp: lich dd/mm/yyyy (ví dụ: lich 12/08/2025)"
-        return await update.effective_chat.send_message(msg, reply_markup=main_keyboard())
+            html = "❗ Cú pháp: lich mm/yyyy (ví dụ: lich 08/2025)"
+        return await update.effective_chat.send_message(html, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 
     await update.effective_chat.send_message("Mời chọn từ menu bên dưới.", reply_markup=main_keyboard())
 
