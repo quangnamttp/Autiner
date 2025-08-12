@@ -1,4 +1,4 @@
-# price_onus.py
+# price_format.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from decimal import Decimal, ROUND_DOWN, getcontext
@@ -32,20 +32,33 @@ def auto_denom(symbol: str, last_usd: float, vnd_rate: float) -> tuple[str, floa
     - Nếu base_vnd < 0.001  -> hậu tố '1M',  * 1_000_000
     - elif base_vnd < 1     -> hậu tố '1000',* 1_000
     - else giữ nguyên
-    Ngoài ra ép hậu tố với FORCE_DENOM để nhất quán hiển thị.
+
+    BỔ SUNG:
+    - Nếu ép '1000' theo FORCE_DENOM mà giá quy ra VND vẫn < 1 → tự nâng lên '1M'.
     """
     root = str(symbol).replace("_USDT", "")
-    if root in FORCE_DENOM:
-        tag = FORCE_DENOM[root]
-        mul = 1_000_000.0 if tag == "1M" else 1_000.0
-        return f"{root}{tag}", (last_usd or 0.0) * mul, mul
+    base_usd = float(last_usd or 0.0)
+    rate     = float(vnd_rate or 0.0)
 
-    base_vnd = (last_usd or 0.0) * (vnd_rate or 0.0)
+    # 1) Ưu tiên ép theo FORCE_DENOM (thường '1000' cho coin siêu nhỏ)
+    if root in FORCE_DENOM:
+        tag = FORCE_DENOM[root]  # "1000" hoặc "1M"
+        mul = 1_000_000.0 if tag == "1M" else 1_000.0
+        adj = base_usd * mul
+        # Nếu đã ép 1000 mà vẫn < 1 VND → tự nâng lên 1M
+        if tag == "1000" and (adj * rate) < 1.0:
+            mul = 1_000_000.0
+            adj = base_usd * mul
+            return f"{root}1M", adj, mul
+        return f"{root}{tag}", adj, mul
+
+    # 2) Auto-denom kiểu ONUS theo base_vnd
+    base_vnd = base_usd * rate
     if base_vnd < 0.001:
-        return f"{root}1M",  (last_usd or 0.0) * 1_000_000.0, 1_000_000.0
+        return f"{root}1M",  base_usd * 1_000_000.0, 1_000_000.0
     if base_vnd < 1.0:
-        return f"{root}1000", (last_usd or 0.0) * 1_000.0,     1_000.0
-    return root, float(last_usd or 0.0), 1.0
+        return f"{root}1000", base_usd * 1_000.0,     1_000.0
+    return root, base_usd, 1.0
 
 # ---------------- format rules (ONUS style) ----------------
 def fmt_usd_onus(val_usd: float) -> str:
