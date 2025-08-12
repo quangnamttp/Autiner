@@ -1,12 +1,16 @@
 # price_onus.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, getcontext
+import math
+
+getcontext().prec = 28
 
 SMALL_DENOM_SUFFIXES = ("1M", "1000")
 
+# ======================= core ONUS rules =======================
 def _rd(x: float, n: int) -> Decimal:
-    q = Decimal("1." + "0"*n) if n>0 else Decimal("1")
+    q = Decimal("1." + "0"*n) if n > 0 else Decimal("1")
     return Decimal(str(x)).quantize(q, rounding=ROUND_DOWN)
 
 def _dot(s: str) -> str:
@@ -15,60 +19,94 @@ def _dot(s: str) -> str:
 def is_small_name(name: str) -> bool:
     return any(str(name).endswith(s) for s in SMALL_DENOM_SUFFIXES)
 
-def auto_denom(symbol: str, last_usd: float, vnd_rate: float) -> tuple[str, float]:
+def auto_denom(symbol: str, last_usd: float, vnd_rate: float) -> tuple[str, float, float]:
     """
-    Trả về (display_name, adjusted_usd).
-    Quy tắc ONUS:
-    - Nếu last_usd * vnd_rate < 0.001  -> thêm '1M',  nhân 1_000_000
-    - elif last_usd * vnd_rate < 1     -> thêm '1000', nhân 1_000
+    Trả (display_name, adjusted_usd, multiplier)
+    - Nếu last_usd * vnd_rate < 0.001  -> hậu tố '1M',  nhân 1_000_000
+    - elif < 1                         -> hậu tố '1000', nhân 1_000
     - else giữ nguyên
     """
     root = str(symbol).replace("_USDT", "")
     base_vnd = (last_usd or 0.0) * (vnd_rate or 0.0)
     if base_vnd < 0.001:
-        return f"{root}1M",  (last_usd or 0.0) * 1_000_000.0
+        return f"{root}1M",  (last_usd or 0.0) * 1_000_000.0, 1_000_000.0
     if base_vnd < 1.0:
-        return f"{root}1000", (last_usd or 0.0) * 1_000.0
-    return root, float(last_usd or 0.0)
+        return f"{root}1000", (last_usd or 0.0) * 1_000.0, 1_000.0
+    return root, float(last_usd or 0.0), 1.0
 
-def fmt_usd_onus(val_usd: float, small: bool) -> str:
-    """
-    USD:
-    - >= 1_000: không thập phân, chấm ngăn nghìn (VD: 110.232.000)
-    - 1 .. <1000: 2 lẻ, ROUND_DOWN
-    - < 1: 7 lẻ (không làm tròn) — hợp coin nhỏ như PEPE1000
-    """
+def fmt_usd_onus(val_usd: float) -> str:
     x = float(val_usd or 0.0)
     if x >= 1_000:
         return _dot(f"{int(x):,}")
     if x >= 1:
         return _dot(f"{_rd(x,2):,.2f}")
-    # nhỏ hơn 1
-    return f"{_rd(x,7):f}".rstrip("0").rstrip(".")  # để đúng kiểu 0.0111993
+    return f"{_rd(x,7):f}".rstrip("0").rstrip(".")
 
 def fmt_vnd_onus(val_vnd: float, small: bool) -> str:
-    """
-    VND:
-    - small (…1000/…1M): 4 lẻ, ROUND_DOWN  (VD: 268.7316)
-    - normal: >=100k:0 lẻ | >=1k:2 lẻ | <1k:4 lẻ (đều ROUND_DOWN), chấm ngăn nghìn
-    """
     x = float(val_vnd or 0.0)
     if small:
-        return _dot(f"{_rd(x,4):,.4f}")
+        return _dot(f"{_rd(x,4):,.4f}")   # coin mệnh giá nhỏ: 4 lẻ cố định
     if x >= 100_000:
-        return _dot(f"{int(x):,}")
+        return _dot(f"{int(x):,}")       # mệnh giá lớn: 0 lẻ
     if x >= 1_000:
-        return _dot(f"{_rd(x,2):,.2f}")
-    return _dot(f"{_rd(x,4):,.4f}")
+        return _dot(f"{_rd(x,2):,.2f}")  # trung bình: 2 lẻ
+    return _dot(f"{_rd(x,4):,.4f}")      # rất nhỏ: 4 lẻ
 
-def display_price(symbol: str, last_usd: float, vnd_rate: float, unit: str="VND") -> tuple[str, str]:
+# ======================= tick-size layer =======================
+def round_down_to_tick(value: float, tick: float) -> float:
+    """Làm tròn xuống theo bước giá tick (tránh sai khác so với UI sàn)."""
+    if not tick or tick <= 0:
+        return float(value or 0.0)
+    v = Decimal(str(value))
+    tk = Decimal(str(tick))
+    k = (v / tk).to_integral_value(rounding=ROUND_DOWN)
+    return float(k * tk)
+
+# Tick map cho những cặp hay dùng (đơn vị theo **đơn vị hiển thị**)
+# Nếu hiển thị VND thì dùng map VND; nếu hiển thị USD thì dùng map USD.
+TICK_VND = {
+    # mệnh giá nhỏ (…1000/…1M)
+    "PEPE1000": 0.0001,
+    "SHIB1000": 0.01,
+    "BONK1000": 0.01,
+    # mệnh giá vừa/lớn
+    "ARC": 0.01,
+    "TRUMP": 1,
+    "BTC": 1,
+    "ETH": 0.01,
+}
+
+TICK_USD = {
+    "BTC": 1,
+    "ETH": 0.01,
+    # coin siêu nhỏ sau auto-denom vẫn < 1 USD → 7 lẻ là đủ, thường không cần tick,
+    # nhưng bạn có thể khai báo nếu muốn.
+}
+
+def _lookup_tick(display_name: str, unit: str) -> float:
+    root = display_name.replace("1M", "").replace("1000", "")
+    if unit.upper() == "VND":
+        # ưu tiên tên đã auto-denom (PEPE1000, SHIB1000…), sau đó tới root
+        return TICK_VND.get(display_name) or TICK_VND.get(root) or 0.0
+    return TICK_USD.get(display_name) or TICK_USD.get(root) or 0.0
+
+# ======================= public API =======================
+def display_price(symbol: str, last_usd: float, vnd_rate: float, unit: str = "VND") -> tuple[str, str]:
     """
-    Tính tên hiển thị & giá hiển thị.
-    - last_usd: giá **gốc** của MEXC Futures (chưa auto‑denom)
-    - Trả về (display_name, price_str)
+    Tính tên hiển thị & giá hiển thị (đã áp dụng auto‑denom + tick size).
+    Trả: (display_name, price_str)
     """
-    name, adj_usd = auto_denom(symbol, last_usd, vnd_rate)
+    name, adj_usd, _mul = auto_denom(symbol, last_usd, vnd_rate)
     small = is_small_name(name)
+
     if unit.upper() == "USD":
-        return name, fmt_usd_onus(adj_usd, small)
-    return name, fmt_vnd_onus(adj_usd * (vnd_rate or 0.0), small)
+        tick = _lookup_tick(name, "USD")
+        price_usd = adj_usd
+        price_usd = round_down_to_tick(price_usd, tick) if tick else price_usd
+        return name, fmt_usd_onus(price_usd)
+
+    # VND
+    tick = _lookup_tick(name, "VND")
+    price_vnd = adj_usd * (vnd_rate or 0.0)
+    price_vnd = round_down_to_tick(price_vnd, tick) if tick else price_vnd
+    return name, fmt_vnd_onus(price_vnd, small)
