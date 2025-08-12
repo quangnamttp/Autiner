@@ -1,94 +1,84 @@
+# price_onus.py
 # -*- coding: utf-8 -*-
 """
-Công thức giá ONUS (áp dụng cho hiển thị MEXC VND và tín hiệu):
-- Quy đổi ONUS auto-denom cho coin mệnh giá siêu nhỏ:
-    base_vnd = last_usd * vnd_rate
-    if base_vnd < 0.001  -> nhân 1_000_000  (hậu tố '1M')    # ví dụ PEPE1M
-    elif base_vnd < 1    -> nhân 1_000      (hậu tố '1000')  # ví dụ BONK1000
-    else                  giữ nguyên                          # BTC, ETH, ...
-- Format VND giống ONUS (ROUND_DOWN, phân tách nghìn bằng dấu chấm):
-    >= 100_000 VND : 0 số lẻ
-    >=   1_000 VND : 2 số lẻ
-    <    1_000 VND : 4 số lẻ
-- Không làm tròn lên: luôn cắt bớt (ROUND_DOWN).
+Cách tính giá ONUS cho hiển thị bot/tín hiệu.
+
+- Auto-denom: chuyển các coin siêu nhỏ sang hậu tố 1000/1M giống ONUS
+- VND format:
+  * Coin mệnh giá nhỏ (…1000 / …1M): giữ 4 số lẻ, ROUND_DOWN (không làm tròn lên)
+  * Coin thường: ONUS rule (0/2/4 lẻ) + dấu chấm ngăn nghìn
+- USD format: tối đa 4 số lẻ, cắt đuôi 0
 """
 
 from __future__ import annotations
 from decimal import Decimal, ROUND_DOWN
-from typing import Tuple
 
-# ---------- Format helpers ----------
+SMALL_DENOM_SUFFIXES = ("1M", "1000")
 
-def _group_thousands_dot(s: str) -> str:
-    """Đổi dấu phẩy chuẩn US -> dấu chấm ngăn nghìn theo VN."""
+def _round_down(num: float, places: int) -> Decimal:
+    q = Decimal("1." + "0"*places) if places > 0 else Decimal("1")
+    return Decimal(str(num)).quantize(q, rounding=ROUND_DOWN)
+
+def _thousand_dot(s: str) -> str:
+    # đổi ',' → '.' cho đúng kiểu VN
     return s.replace(",", ".")
 
-def format_onus_vnd(value_vnd: float | int) -> str:
+def is_small_denom_name(name: str) -> bool:
+    return any(name.endswith(suf) for suf in SMALL_DENOM_SUFFIXES)
+
+def auto_denom(symbol: str, last_usd: float, vnd_rate: float) -> tuple[str, float, float]:
     """
-    Format số tiền VND theo quy tắc ONUS (ROUND_DOWN, 0/2/4 số lẻ).
-    Ví dụ:
-      2294907318  -> '2.294.907.318'
-      92351038.5  -> '92.351.038,50'  (nhưng dùng dấu chấm nên -> '92.351.038.50')
-    Lưu ý: theo đặc tả trước giờ ta dùng dấu '.' cho cả nghìn và thập phân.
+    Trả về: (display_name, adjusted_usd, multiplier)
+    - Nếu giá * VND < 0.001 → nhân 1_000_000, thêm '1M'
+    - Nếu giá * VND < 1     → nhân 1_000,     thêm '1000'
+    - Ngược lại giữ nguyên
     """
-    val = Decimal(str(value_vnd or 0.0))
-    if val >= Decimal("100000"):
-        q = val.quantize(Decimal("1"), rounding=ROUND_DOWN)                 # 0 lẻ
-        s = f"{int(q):,}"
-    elif val >= Decimal("1000"):
-        q = val.quantize(Decimal("0.01"), rounding=ROUND_DOWN)              # 2 lẻ
+    base = (last_usd or 0.0) * (vnd_rate or 0.0)
+    root = str(symbol).replace("_USDT", "")
+    if base < 0.001:
+        return f"{root}1M", (last_usd or 0.0) * 1_000_000.0, 1_000_000.0
+    if base < 1.0:
+        return f"{root}1000", (last_usd or 0.0) * 1_000.0, 1_000.0
+    return root, float(last_usd or 0.0), 1.0
+
+def fmt_usd(val_usd: float) -> str:
+    s = f"{float(val_usd or 0.0):.4f}".rstrip("0").rstrip(".")
+    return s if s else "0"
+
+def fmt_vnd_onus(val_vnd: float, small_denom: bool) -> str:
+    """
+    Format VND theo ONUS:
+      - small_denom: 4 lẻ, ROUND_DOWN
+      - normal: >=100k:0 lẻ | >=1k:2 lẻ | <1k:4 lẻ (ROUND_DOWN)
+    """
+    x = float(val_vnd or 0.0)
+    if small_denom:
+        q = _round_down(x, 4)
+        s = f"{q:,.4f}"  # giữ 4 lẻ
+        return _thousand_dot(s)
+    # coin thường
+    if x >= 100_000:
+        s = f"{int(x):,}"
+        return _thousand_dot(s)
+    elif x >= 1_000:
+        q = _round_down(x, 2)
         s = f"{q:,.2f}"
+        return _thousand_dot(s)
     else:
-        q = val.quantize(Decimal("0.0001"), rounding=ROUND_DOWN)            # 4 lẻ
+        q = _round_down(x, 4)
         s = f"{q:,.4f}"
-    return _group_thousands_dot(s)
+        return _thousand_dot(s)
 
-# ---------- Auto-denom (ONUS-style) ----------
-
-def auto_denom(symbol: str, last_usd: float, vnd_rate: float) -> Tuple[str, float, float]:
+def onus_display_price(symbol: str, last_usd: float, vnd_rate: float, unit: str = "VND") -> tuple[str, str, float]:
     """
-    Tự động “phóng to” đơn vị hiển thị cho coin siêu nhỏ (ONUS-style).
-    Trả về:
-        display_symbol : tên để hiển thị (thêm '1000' hoặc '1M' khi cần)
-        adjusted_usd   : giá USD sau khi nhân hệ số (để tính toán nhất quán)
-        multiplier     : hệ số đã nhân (1 / 1_000 / 1_000_000)
+    Tính tên hiển thị & giá hiển thị theo ONUS.
+    Trả: (display_name, price_str, adjusted_usd)
+    - adjusted_usd: giá USD sau auto-denom (để dùng nhất quán trong thuật toán)
     """
-    base_vnd = float(last_usd or 0.0) * float(vnd_rate or 0.0)
-    root = str(symbol or "").replace("_USDT", "")
-
-    if base_vnd < 0.001:
-        mul = 1_000_000.0
-        disp = f"{root}1M"
-    elif base_vnd < 1.0:
-        mul = 1_000.0
-        disp = f"{root}1000"
-    else:
-        mul = 1.0
-        disp = root
-    return disp, float(last_usd or 0.0) * mul, mul
-
-# ---------- API gói gọn để dùng một dòng ----------
-
-def price_vnd_onus(symbol: str, last_usd: float, vnd_rate: float) -> Tuple[str, float, float, str]:
-    """
-    Gộp: auto_denom + quy đổi VND + format ONUS.
-    Trả:
-        display_symbol, raw_vnd, multiplier, formatted_vnd
-    """
-    disp, adj_usd, mul = auto_denom(symbol, last_usd, vnd_rate)
-    raw_vnd = float(adj_usd) * float(vnd_rate or 0.0)
-    return disp, raw_vnd, mul, format_onus_vnd(raw_vnd)
-
-# ---------- Phụ trợ hiển thị % với mũi tên màu ----------
-def arrow_pct(pct: float) -> str:
-    """
-    Trả text phần trăm với mũi tên màu (🔺 xanh / 🔻 đỏ), 2 số lẻ.
-    Ví dụ: +2.15% -> '🔺 +2.15%' ; -0.85% -> '🔻 -0.85%'
-    """
-    try:
-        p = float(pct or 0.0)
-    except Exception:
-        p = 0.0
-    sign = "+" if p >= 0 else ""
-    arrow = "🔺" if p >= 0 else "🔻"
-    return f"{arrow} {sign}{abs(p):.2f}%"
+    disp, adj_usd, _ = auto_denom(symbol, last_usd, vnd_rate)
+    if unit.upper() == "USD":
+        return disp, fmt_usd(adj_usd), adj_usd
+    # VND
+    small = is_small_denom_name(disp)
+    price_vnd = adj_usd * (vnd_rate or 0.0)
+    return disp, fmt_vnd_onus(price_vnd, small), adj_usd
