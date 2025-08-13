@@ -1,3 +1,4 @@
+# Autiner/bots/telegram_bot/telegram_bot.py
 # -*- coding: utf-8 -*-
 """
 Autiner Telegram Bot (v2)
@@ -15,7 +16,7 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application, ApplicationBuilder, CommandHandler,
-    MessageHandler, ContextTypes, filters
+    MessageHandler, ContextTypes, filters, JobQueue  # <-- thêm JobQueue
 )
 
 # ===== settings =====
@@ -41,7 +42,7 @@ except Exception:
     build_night_message = None
 
 # MEXC client để kiểm tra live + nuôi dữ liệu
-from bots.mexc_client import fetch_tickers, get_usd_vnd_rate, health_ping
+from bots.mexc_client import fetch_tickers, health_ping
 
 # ===== Signal Engine =====
 # ĐÚNG PATH + TÊN HÀM theo repo của bạn
@@ -50,6 +51,7 @@ try:
     from bots.signals.signal_engine import generate_scalping_signals as _signal_fn
 except Exception:
     _signal_fn = None
+
 
 def _call_signals(unit: str, n: int):
     """
@@ -63,6 +65,7 @@ def _call_signals(unit: str, n: int):
     if isinstance(out, tuple):
         return out[0] or []
     return out or []
+
 
 # ===== globals =====
 VN_TZ = pytz.timezone(TZ_NAME)
@@ -95,6 +98,7 @@ def next_slot_info(now: datetime) -> tuple[str, int]:
     mins = max(0, int((nxt - now).total_seconds() // 60))
     return nxt.strftime("%H:%M"), mins
 
+
 # ===== UI =====
 BTN_STATUS = "🔎 Trạng thái"
 BTN_TEST   = "🧪 Test"
@@ -108,6 +112,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
+
 # ===== thread offload =====
 async def _to_thread(func, *args, timeout: int = 25, **kwargs):
     async def _run():
@@ -116,6 +121,7 @@ async def _to_thread(func, *args, timeout: int = 25, **kwargs):
         return await asyncio.wait_for(_run(), timeout=timeout)
     except Exception:
         return None
+
 
 # ===== commands =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -186,6 +192,7 @@ async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await context.bot.send_message(chat_id, msg, reply_markup=main_keyboard())
 
+
 # ===== countdown trước slot 15s =====
 async def pre_countdown(context: ContextTypes.DEFAULT_TYPE):
     if not _auto_on:
@@ -211,6 +218,7 @@ async def pre_countdown(context: ContextTypes.DEFAULT_TYPE):
                 pass
     except Exception:
         return
+
 
 # ===== gửi batch tín hiệu đúng hh:mm:00 =====
 async def send_batch_scalping(context: ContextTypes.DEFAULT_TYPE):
@@ -245,12 +253,14 @@ async def send_batch_scalping(context: ContextTypes.DEFAULT_TYPE):
         )
         await context.bot.send_message(chat_id, msg, reply_markup=main_keyboard())
 
+
 # ===== health monitor & render keep-alive =====
 async def health_probe(context: ContextTypes.DEFAULT_TYPE):
     if not _auto_on:
         return
     # ping nhẹ để giữ dyno thức + xác thực nguồn còn sống
     await _to_thread(health_ping, timeout=5)
+
 
 # ===== text router =====
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -268,6 +278,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.effective_chat.send_message("Mời chọn từ menu bên dưới.", reply_markup=main_keyboard())
 
+
 # ===== build app & schedule =====
 def build_app() -> Application:
     app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
@@ -276,7 +287,13 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), on_text))
 
+    # ==== BẢO HIỂM JOB QUEUE: nếu app.job_queue = None thì tự tạo ====
     j = app.job_queue
+    if j is None:
+        j = JobQueue()
+        j.set_application(app)
+        j.start()
+    # ================================================================
 
     # 06:00 chào buổi sáng (nếu có file)
     if build_morning_text:
