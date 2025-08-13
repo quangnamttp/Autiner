@@ -4,7 +4,7 @@
 Autiner Telegram Bot (v2, webhook-friendly)
 - Menu: 🔎 Trạng thái | 🟢/🔴 Auto ON/OFF | 🧪 Test | 💰/💵 đổi đơn vị
 - Slot: 06:15 → 21:45 mỗi 30' (THÔNG BÁO trước ~1 phút)
-- Gọi: morning_report (06:00) & night_summary (22:00) nếu có
+- Gọi: morning_report (06:00) & night_summary (22:00)
 - Không block event-loop: tác vụ nặng chạy trong thread + timeout
 - Có lệnh chẩn đoán: /diag
 """
@@ -29,7 +29,7 @@ from settings import (
 )
 
 # ===== domain modules =====
-# Morning/Night
+# 06:00 & 22:00
 try:
     from bots.pricing.morning_report import build_morning_text
 except Exception:
@@ -64,7 +64,6 @@ def _call_signals(unit: str, n: int):
 VN_TZ = pytz.timezone(TZ_NAME)
 _current_unit = DEFAULT_UNIT if DEFAULT_UNIT in ("VND", "USD") else "VND"
 _auto_on = True
-
 
 # ===== helpers =====
 def guard(update: Update) -> bool:
@@ -302,7 +301,7 @@ def build_app() -> Application:
     # Jobs (nếu cài job-queue)
     j = app.job_queue
     if j is not None:
-        # 06:00 chào buổi sáng (nếu có file)
+        # 06:00 chào buổi sáng
         if build_morning_text:
             async def _send_6h(ctx):
                 if not ALLOWED_USER_ID: return
@@ -311,7 +310,7 @@ def build_app() -> Application:
                     await ctx.bot.send_message(ALLOWED_USER_ID, text)
             j.run_daily(_send_6h, time=dt_time(6, 0, tzinfo=VN_TZ))
 
-        # 22:00 tổng kết (nếu có file)
+        # 22:00 tổng kết
         if build_night_message:
             async def _send_22h(ctx):
                 if not ALLOWED_USER_ID: return
