@@ -1,4 +1,4 @@
-# Autiner/bots/pricing/morning_report.py
+# autiner/bots/pricing/morning_report.py
 # -*- coding: utf-8 -*-
 """
 Bản tin 06:00 — Chào buổi sáng (MEXC Futures)
@@ -6,32 +6,28 @@ Bản tin 06:00 — Chào buổi sáng (MEXC Futures)
 • Lấy USD/VND
 • Lấy danh sách futures: symbol, lastPrice, quoteVol (24h), %change
 • Chọn Top 5 theo volume 24h
-• Áp dụng định dạng giá ONUS từ onus_format.display_price (bạn đã có)
+• Định dạng giá theo ONUS (display_price)
 • Ước tính thiên hướng thị trường (Long/Short) theo %change24h có trọng số volume
-• Trả về text để bot gửi, hoặc dùng hàm async để lên lịch 06:00
+• Trả về text cho Telegram bot (không tự schedule trong file này)
 """
 
 from __future__ import annotations
 from typing import List, Dict, Tuple
-from datetime import datetime, time as dt_time
+from datetime import datetime
 import requests
 import pytz
 
-from settings import (
-    USDVND_URL, MEXC_TICKER_URL, DEFAULT_UNIT, TZ_NAME,
-    TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID
-)
+from settings import USDVND_URL, MEXC_TICKER_URL, DEFAULT_UNIT, TZ_NAME
 
-# ⚠️ Formatter ONUS bạn đã có sẵn:
-# Autiner/bots/pricing/onus_format.py
-from .onus_format import display_price  # (display_name, price_str) = display_price(symbol, last_usd, vnd_rate, unit)
+# Formatter ONUS (đúng đường dẫn repo hiện tại)
+from bots.pricing.onus_format import display_price  # -> (display_name, price_str)
 
 VN_TZ = pytz.timezone(TZ_NAME)
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124 Safari/537.36"}
 HTTP_TIMEOUT = 10
 
 
-# -------- helpers --------
+# ---------------- helpers ----------------
 def _get_json(url: str):
     try:
         r = requests.get(url, headers=_HEADERS, timeout=HTTP_TIMEOUT)
@@ -54,7 +50,7 @@ def fetch_mexc_tickers() -> List[Dict]:
     [{symbol:"BTC_USDT", last:<float>, qv:<float>, chg:<percent>}, ...]
     """
     js = _get_json(MEXC_TICKER_URL)
-    out = []
+    out: List[Dict] = []
     rows = []
     if isinstance(js, dict) and (js.get("success") or "data" in js):
         rows = js.get("data") or []
@@ -68,20 +64,34 @@ def fetch_mexc_tickers() -> List[Dict]:
         # last
         try:
             last = float(it.get("lastPrice") or it.get("last") or it.get("price") or it.get("close") or 0.0)
-        except:
+        except Exception:
             last = 0.0
-        # quoteVol 24h (USDT)
-        try:
-            qv = float(it.get("quoteVol") or it.get("amount24") or it.get("turnover") or it.get("turnover24") or 0.0)
-        except:
-            qv = 0.0
-        # % change 24h -> chuẩn hóa về %
+        # quoteVol 24h (USDT) — vá nhiều khóa có thể gặp
+        qv = 0.0
+        for k in ("quoteVol", "amount24", "turnover", "turnover24", "turnover24h",
+                  "quote_volume", "volValue", "volQuote", "volumeQuote"):
+            if isinstance(it, dict) and k in it and it[k] not in (None, "", "0"):
+                try:
+                    qv = float(it[k]); break
+                except Exception:
+                    pass
+        if qv == 0.0:
+            for k in ("volume24", "vol24", "baseVol", "volume"):
+                if k in it and it[k] not in (None, "", "0"):
+                    try:
+                        base_vol = float(it[k])
+                        if base_vol > 0 and last > 0:
+                            qv = base_vol * last
+                            break
+                    except Exception:
+                        pass
+        # % change 24h -> về %
         try:
             raw = it.get("riseFallRate") or it.get("changeRate") or it.get("percent") or 0
             chg = float(raw)
             if abs(chg) < 1.0:
                 chg *= 100.0
-        except:
+        except Exception:
             chg = 0.0
 
         out.append({"symbol": str(sym), "last": last, "qv": qv, "chg": chg})
@@ -96,8 +106,8 @@ def market_bias(items: List[Dict], topn: int = 40) -> Tuple[float, float, str]:
     Tính tỉ trọng dương/âm theo volume (weight).
     """
     pool = sorted(items, key=lambda d: d.get("qv", 0.0), reverse=True)[:max(10, topn)]
-    pos_w = sum(d["qv"] for d in pool if d.get("chg", 0.0) > 0)
-    neg_w = sum(d["qv"] for d in pool if d.get("chg", 0.0) < 0)
+    pos_w = sum(d.get("qv", 0.0) for d in pool if d.get("chg", 0.0) > 0)
+    neg_w = sum(d.get("qv", 0.0) for d in pool if d.get("chg", 0.0) < 0)
     total = pos_w + neg_w
     if total <= 0:
         return 50.0, 50.0, "Trung tính"
@@ -112,16 +122,16 @@ def arrow_and_sign(change_pct: float) -> Tuple[str, str]:
         return "🔺", f"+{change_pct:.2f}%"
     return "🔻", f"{change_pct:.2f}%"
 
-def fmt_vnd_rate(v: float) -> str:
-    # 25,123.45
-    return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+def fmt_num(n: float, decimals: int = 0) -> str:
+    s = f"{n:,.{decimals}f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
 
 def weekday_vi(dt: datetime) -> str:
     names = ["Thứ Hai","Thứ Ba","Thứ Tư","Thứ Năm","Thứ Sáu","Thứ Bảy","Chủ Nhật"]
     return names[dt.weekday()]
 
 
-# -------- public: build text --------
+# ---------------- public ----------------
 def build_morning_text(unit: str | None = None, recipient_name: str | None = None) -> str:
     """
     Trả về chuỗi tin nhắn 06:00 (không gửi).
@@ -133,11 +143,40 @@ def build_morning_text(unit: str | None = None, recipient_name: str | None = Non
     usd_vnd = get_usd_vnd_rate()
     tickers = fetch_mexc_tickers()
 
-    # thiên hướng
-    long_pct, short_pct, bias = market_bias(tickers, topn=40)
+    if not tickers:
+        hi = f"🌅 06:00 — Chào buổi sáng{(', ' + recipient_name) if recipient_name else ''}!"
+        return (
+            f"{hi}\n"
+            f"⚠️ Không lấy được dữ liệu thị trường lúc {now.strftime('%H:%M %d/%m/%Y')}.\n"
+            "Bạn thử /status hoặc /test lại sau nhé."
+        )
 
-    # top 5 theo volume
+    long_pct, short_pct, bias = market_bias(tickers, topn=40)
     top5 = pick_top5_by_volume(tickers)
 
-    # header
-    head_day = f"📅 {weekday_vi(now)}, {now.strftime('%d/%m/%
+    # Header
+    head_day = f"📅 {weekday_vi(now)}, {now.strftime('%d/%m/%Y')}"
+    hi = f"🌅 06:00 — Chào buổi sáng" + (f", {recipient_name}!" if recipient_name else "!")
+    fx_line = f"💱 USD/VND ≈ {fmt_num(usd_vnd, 2)}"
+
+    # Top 5
+    lines = [head_day, hi, fx_line, "", "🔥 Top 5 Futures theo khối lượng 24h:"]
+    for it in top5:
+        sym = it["symbol"]
+        last = float(it.get("last", 0.0))
+        qv = float(it.get("qv", 0.0))
+        chg = float(it.get("chg", 0.0))
+        name, px_txt = display_price(sym, last, usd_vnd, unit)
+        arrow, chg_txt = arrow_and_sign(chg)
+        vol_txt = fmt_num(qv, 0)
+        lines.append(f"• {name}: {px_txt} {unit}  {arrow}{chg_txt}  | Vol24h: {vol_txt} USDT")
+
+    # Bias
+    lines += [
+        "",
+        "🧭 Thiên hướng thị trường (KL trọng số):",
+        f"• Long {int(long_pct)}% | Short {int(short_pct)}%  → **{bias}**",
+        "",
+        "Chúc bạn một ngày giao dịch hiệu quả! ✅"
+    ]
+    return "\n".join(lines)
