@@ -38,9 +38,6 @@ MEXC_KLINES_URL  = os.getenv(
 USDVND_URL = os.getenv("USDVND_URL", "https://api.exchangerate.host/latest?base=USD&symbols=VND")
 
 # ===== MEXC PRIVATE (để lệnh/account sau này) =====
-# 👉 Bạn chỉ set trên Render:
-# MEXC_API_KEY=mx0vgl8vcbqeQC9MYS
-# MEXC_API_SECRET=3974e94436b0453da81fdb0289be0b8c
 MEXC_API_KEY    = os.getenv("MEXC_API_KEY", "")
 MEXC_API_SECRET = os.getenv("MEXC_API_SECRET", "")
 
@@ -62,3 +59,6 @@ TRAIL_STEP_K        = float(os.getenv("TRAIL_STEP_K", "0.25"))
 DIVERSITY_POOL_TOPN = int(os.getenv("DIVERSITY_POOL_TOPN", "40"))
 SAME_PRICE_EPS      = float(os.getenv("SAME_PRICE_EPS", "0.0008"))
 REPEAT_BONUS_DELTA  = float(os.getenv("REPEAT_BONUS_DELTA", "0.6"))
+
+# ===== Auto volume floor =====
+AUTO_VOL_FLOOR      = int(os.getenv("AUTO_VOL_FLOOR", "0"))
