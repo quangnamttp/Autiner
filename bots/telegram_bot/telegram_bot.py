@@ -1,4 +1,3 @@
-# Autiner/bots/telegram_bot/telegram_bot.py
 # -*- coding: utf-8 -*-
 """
 Autiner Telegram Bot (v2)
@@ -28,27 +27,27 @@ from settings import (
 
 # ===== domain modules =====
 # (Không bắt buộc dùng trực tiếp ở file này nhưng để sẵn nếu muốn hiển thị giá lẻ)
-# from Autiner.bots.pricing.price_format import display_price
+# from bots.pricing.price_format import display_price
 
-# Morning/Night
+# Morning/Night (đổi sang 'bots...' cho thống nhất với web.py)
 try:
-    from Autiner.bots.pricing.morning_report import build_morning_text
+    from bots.pricing.morning_report import build_morning_text
 except Exception:
     build_morning_text = None
 
 try:
-    from Autiner.bots.pricing.night_summary import build_night_message
+    from bots.pricing.night_summary import build_night_message
 except Exception:
     build_night_message = None
 
 # MEXC client để kiểm tra live + nuôi dữ liệu
-from Autiner.bots.mexc_client import fetch_tickers, get_usd_vnd_rate, health_ping
+from bots.mexc_client import fetch_tickers, get_usd_vnd_rate, health_ping
 
 # ===== Signal Engine =====
 # ĐÚNG PATH + TÊN HÀM theo repo của bạn
 _signal_fn = None
 try:
-    from Autiner.bots.signals.signal_engine import generate_scalping_signals as _signal_fn
+    from bots.signals.signal_engine import generate_scalping_signals as _signal_fn
 except Exception:
     _signal_fn = None
 
@@ -168,11 +167,6 @@ async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, text6)
 
     # tín hiệu
-    if not _signal_fn:
-        await context.bot.send_message(chat_id, "⚠️ Chưa có Signal Engine. Vui lòng thêm Autiner/bots/signals/signal_engine.py", reply_markup=main_keyboard())
-        return
-
-    await context.bot.send_message(chat_id, "🧪 Đang tạo tín hiệu thử...", reply_markup=main_keyboard())
     sigs = await _to_thread(_call_signals, _current_unit, NUM_SCALPING, timeout=28)
     if not sigs:
         await context.bot.send_message(chat_id, "⚠️ Chưa đủ dữ liệu / engine trả rỗng.", reply_markup=main_keyboard())
@@ -269,7 +263,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await toggle_auto(update, context)
     if "test" in txt:
         return await test_cmd(update, context)
-    if "mexc" in txt or "đơn vị" in txt hoặc "usd" in txt hoặc "vnd" in txt:
+    if ("mexc" in txt) or ("đơn vị" in txt) or ("usd" in txt) or ("vnd" in txt):
         return await toggle_unit(update, context)
 
     await update.effective_chat.send_message("Mời chọn từ menu bên dưới.", reply_markup=main_keyboard())
