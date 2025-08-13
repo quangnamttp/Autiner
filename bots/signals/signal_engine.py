@@ -2,6 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 Autiner — Signal Engine (Scalping, pro)
+
+- Lấy snapshot MEXC (tickers + funding) -> lọc thanh khoản theo VOL24H_FLOOR
+- Phân tích 1m/5m (EMA9/21, ATR, RSI, sigma, break+retest)
+- Chấm điểm + chọn ngẫu nhiên theo softmax để đa dạng
+- Trả về danh sách tín hiệu cho Telegram bot
+
+Lưu ý:
+- Dùng đúng formatter đang có: bots/pricing/onus_format.py -> display_price()
 """
 
 from __future__ import annotations
@@ -21,13 +29,13 @@ from settings import (
     DIVERSITY_POOL_TOPN, SAME_PRICE_EPS, REPEAT_BONUS_DELTA,
 )
 
-# Formatter bạn đang dùng
+# Đúng đường dẫn theo repo hiện tại
 from bots.pricing.onus_format import display_price
 
 _session = requests.Session()
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124 Safari/537.36"}
 
-_last_fx = {"ts": 0.0, "rate": 24500.0}
+_last_fx = {"ts": 0.0, "rate": 24500.0}  # fallback an toàn
 _prev_volume: Dict[str, float] = {}
 _hist_px: Dict[str, deque] = {}
 _last_batch: set[str] = set()
@@ -53,34 +61,59 @@ def usd_vnd_rate() -> float:
         try:
             rate = float(js.get("rates", {}).get("VND"))
             if rate > 0:
-                _last_fx.update(ts=now, rate=rate)
+                _last_fx["ts"] = now
+                _last_fx["rate"] = rate
                 return rate
         except Exception:
             pass
+    # fallback
     return _last_fx["rate"]
 
-# ---------------- Fetch live ----------------
+# ---------------- Live data ----------------
 def _fetch_tickers_live() -> List[dict]:
     tick = _get_json(MEXC_TICKER_URL)
-    items = []
+    items: List[dict] = []
     if isinstance(tick, dict) and (tick.get("success") or "data" in tick):
         arr = tick.get("data") or []
     elif isinstance(tick, list):
         arr = tick
     else:
         arr = []
+
     for it in arr:
         sym = it.get("symbol") or it.get("instrument_id")
         if not sym or not str(sym).endswith("_USDT"):
             continue
+
+        # last
         try:
             last = float(it.get("lastPrice") or it.get("last") or it.get("price") or it.get("close") or 0.0)
         except Exception:
             last = 0.0
-        try:
-            qvol = float(it.get("quoteVol") or it.get("amount24") or it.get("turnover") or it.get("turnover24") or 0.0)
-        except Exception:
-            qvol = 0.0
+
+        # ---- robust quote volume (vá chính) ----
+        qvol = 0.0
+        for k in ("quoteVol", "amount24", "turnover", "turnover24", "turnover24h",
+                  "quote_volume", "volValue", "volQuote", "volumeQuote"):
+            if k in it and it[k] not in (None, "", "0"):
+                try:
+                    qvol = float(it[k])
+                    break
+                except Exception:
+                    pass
+        if qvol == 0.0:
+            # tự suy ra từ base volume * last nếu có
+            for k in ("volume24", "vol24", "baseVol", "volume"):
+                if k in it and it[k] not in (None, "", "0"):
+                    try:
+                        base_vol = float(it[k])
+                        if base_vol > 0 and last > 0:
+                            qvol = base_vol * last
+                            break
+                    except Exception:
+                        pass
+
+        # % change 24h
         try:
             raw = it.get("riseFallRate") or it.get("changeRate") or it.get("percent") or 0
             chg = float(raw)
@@ -88,6 +121,7 @@ def _fetch_tickers_live() -> List[dict]:
                 chg *= 100.0
         except Exception:
             chg = 0.0
+
         items.append({
             "symbol": str(sym),
             "lastPrice": last,
@@ -113,6 +147,7 @@ def _fetch_funding_live() -> Dict[str, float]:
         rows = js
     if not rows:
         return fmap
+
     for it in rows:
         try:
             s = it.get("symbol") or it.get("currency")
@@ -124,7 +159,7 @@ def _fetch_funding_live() -> Dict[str, float]:
                     val = it[k]; break
             fr = float(val) if val is not None else 0.0
             if abs(fr) < 1.0:
-                fr = fr * 100.0
+                fr *= 100.0
             fmap[str(s)] = fr
         except Exception:
             continue
@@ -133,7 +168,7 @@ def _fetch_funding_live() -> Dict[str, float]:
 def _fetch_klines_1m(sym: str) -> List[dict]:
     url = MEXC_KLINES_URL.format(sym=sym)
     js = _get_json(url)
-    out = []
+    out: List[dict] = []
     if isinstance(js, dict) and "data" in js:
         rows = js.get("data") or []
     elif isinstance(js, list):
@@ -153,9 +188,9 @@ def _fetch_klines_1m(sym: str) -> List[dict]:
             except Exception:
                 pass
     out.sort(key=lambda x: x["t"])
-    return out[-120:]  # ~2h
+    return out[-120:]
 
-# ---------------- Indicators ----------------
+# ---------------- TA utils ----------------
 def ema(vals: List[float], period: int) -> List[float]:
     if not vals or period <= 1:
         return vals or []
@@ -207,18 +242,21 @@ def ma(vals: List[float], n: int) -> float:
     if not vals or len(vals) < n: return 0.0
     return sum(vals[-n:]) / n
 
-# ---------------- Snapshot ----------------
+# ---------------- Snapshot + scoring ----------------
 def market_snapshot(unit: str = "VND", topn: int | None = None) -> Tuple[List[dict], bool, float]:
-    if topn is None: topn = DIVERSITY_POOL_TOPN
+    if topn is None:
+        topn = DIVERSITY_POOL_TOPN
     items = _fetch_tickers_live()
     if not items:
         return [], False, usd_vnd_rate()
     fmap = _fetch_funding_live()
     rate = usd_vnd_rate()
+
     # lọc thanh khoản
-    items = [d for d in items if d.get("volumeQuote", 0.0) >= VOL24H_FLOOR]
+    items = [d for d in items if float(d.get("volumeQuote", 0.0)) >= float(VOL24H_FLOOR or 0)]
     if not items:
         return [], False, rate
+
     items.sort(key=lambda d: d.get("volumeQuote", 0.0), reverse=True)
     items = items[:max(5, topn)]
     out = []
@@ -233,7 +271,6 @@ def market_snapshot(unit: str = "VND", topn: int | None = None) -> Tuple[List[di
         })
     return out, True, rate
 
-# ---------------- Scoring ----------------
 def _softmax(xs: List[float]) -> List[float]:
     if not xs: return []
     m = max(xs)
@@ -258,12 +295,14 @@ def _score_coin(idx_rank: int, c: dict, prev_vol: float) -> Tuple[float, float, 
     accel = max(0.0, r30 - 0.5 * r60)
     vol_spike = (volq / prev_vol) if prev_vol > 0 else 1.0
     vol_spike = min(vol_spike, 5.0)
+
     still_pen = 0.0
     dq = _hist_px.get(c["symbol"])
     if dq and len(dq) >= 2:
         px_prev = dq[-2]
         if px_prev > 0 and abs(px_usd - px_prev) / px_prev < SAME_PRICE_EPS:
             still_pen = 0.7
+
     base = 1.0 / (idx_rank + 1.0)
     dyn  = max(0.0, abs(r30)) / 2.0
     acc  = accel / 2.0
@@ -337,24 +376,19 @@ def _analyze_klines_for(sym: str) -> dict:
         "last_close": last,
     }
 
-# ---------------- Main API ----------------
+# ---------------- Public API ----------------
 def generate_scalping_signals(unit: str = "VND", n_scalp: int = 5):
-    """
-    Trả: (signals, highlights, live, usd_vnd)
-    """
     global _last_batch, _prev_volume
-
-    # 1) snapshot
     coins, live, rate = market_snapshot(unit="USD", topn=DIVERSITY_POOL_TOPN)
     if not live or not coins:
         return [], [], live, rate
 
-    # 2) cập nhật động lượng
+    # lưu lịch sử giá để tính động lượng
     for c in coins:
         dq = _hist_px.setdefault(c["symbol"], deque(maxlen=3))
         dq.append(float(c["lastPrice"]))
 
-    # 3) chấm điểm + phân tích nến
+    # tính điểm + lọc
     pool = []
     prev_vol_map = {c["symbol"]: _prev_volume.get(c["symbol"], 0.0) for c in coins}
     for idx, c in enumerate(coins):
@@ -366,7 +400,7 @@ def generate_scalping_signals(unit: str = "VND", n_scalp: int = 5):
     if not pool:
         return [], [], live, rate
 
-    # 4) hạn chế lặp
+    # đa dạng hoá
     scores_only = [p[0] for p in pool]
     median = sorted(scores_only)[len(scores_only)//2]
     keep = []
@@ -379,7 +413,6 @@ def generate_scalping_signals(unit: str = "VND", n_scalp: int = 5):
     if not keep:
         keep = pool
 
-    # 5) softmax sampling
     keep.sort(key=lambda x: x[0], reverse=True)
     probs = _softmax([k[0] for k in keep])
     bag, p = keep[:], probs[:]
@@ -399,7 +432,7 @@ def generate_scalping_signals(unit: str = "VND", n_scalp: int = 5):
             s = sum(p)
             p = [x/s for x in p]
 
-    # 6) dựng tín hiệu
+    # dựng tín hiệu
     signals = []
     highlights = []
     usd_vnd = usd_vnd_rate()
@@ -407,15 +440,12 @@ def generate_scalping_signals(unit: str = "VND", n_scalp: int = 5):
         funding = c.get("fundingRate", 0.0)
         ema_up  = feats["trend_up"]
         rsi14   = feats["rsi14"]
-
         want_mk = _need_market(
             feats["break_retest_ok"], feats["vol_mult"],
             funding, r30, r60, ema_up, rsi14
         )
-
         accel = r30 - 0.5*r60
         side = "LONG" if (r30 > 0 and accel >= 0) else "SHORT"
-
         atr = max(0.0, float(feats["atr"]))
         px_usd_now = float(feats["last_close"])
 
@@ -447,7 +477,6 @@ def generate_scalping_signals(unit: str = "VND", n_scalp: int = 5):
             entry_txt = f"{lo_txt}–{hi_txt} {unit_tag}  (TTL {TTL_MINUTES}’)"
 
         strength = int(max(35, min(95, 65 + score*8 - rank*3)))
-
         ctx = {
             "r30": r30, "r60": r60, "accel": accel,
             "vol_mult": feats["vol_mult"],
@@ -470,13 +499,12 @@ def generate_scalping_signals(unit: str = "VND", n_scalp: int = 5):
             "unit": unit_tag
         })
 
-    # 7) cập nhật trạng thái lần sau
     _last_batch = {c["symbol"] for (_,_,_,_,c,_) in picked}
     _prev_volume = {c["symbol"]: c.get("volumeQuote", 0.0) for c in coins}
 
     return signals, highlights, live, usd_vnd
 
-# Wrapper cho Telegram bot (trả list)
+# Wrapper tương thích Telegram bot (trả list)
 def generate_signals(unit: str = "VND", n: int = 5):
     sigs, _, _, _ = generate_scalping_signals(unit=unit, n_scalp=n)
     return sigs
