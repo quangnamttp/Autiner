@@ -22,9 +22,9 @@ from settings import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID
 )
 
-# ⚠️ Bạn đã có file này rồi:
-# Autiner/bots/pricing/onus_format.py  (chỉ import dùng, không chỉnh ở đây)
-from .price_format import display_price
+# ⚠️ Formatter ONUS bạn đã có sẵn:
+# Autiner/bots/pricing/onus_format.py
+from .onus_format import display_price  # (display_name, price_str) = display_price(symbol, last_usd, vnd_rate, unit)
 
 VN_TZ = pytz.timezone(TZ_NAME)
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124 Safari/537.36"}
@@ -140,45 +140,4 @@ def build_morning_text(unit: str | None = None, recipient_name: str | None = Non
     top5 = pick_top5_by_volume(tickers)
 
     # header
-    head_day = f"📅 {weekday_vi(now)}, {now.strftime('%d/%m/%Y')}"
-    hello = f"🌞 06:00 — Chào buổi sáng{' anh ' + recipient_name if recipient_name else ''}! ☀️"
-    rate_line = f"💵 1 USD ≈ {fmt_vnd_rate(usd_vnd)} VND"
-    bias_line = f"📈 Thiên hướng thị trường: {bias} (Long {long_pct:.0f}% | Short {short_pct:.0f}%)"
-
-    # danh sách top 5
-    lines = []
-    for i, d in enumerate(top5, 1):
-        disp, price = display_price(d["symbol"], d["last"], usd_vnd, unit)
-        arrow, pct = arrow_and_sign(float(d.get("chg", 0.0)))
-        lines.append(f"{i}. {disp} — {price} {unit}  {arrow} {pct}")
-
-    coins_block = "🔝 Top 5 theo khối lượng 24h (MEXC Futures — theo " + unit + "):\n" + "\n".join(lines)
-
-    warn = (
-        "⚠️ Cảnh báo xu hướng hôm nay: Nghiêng theo thiên hướng ở trên; "
-        "tránh đu nến khi biến động > 1.5×ATR(5m), ưu tiên vào lại vùng hồi theo xu hướng."
-    )
-    next_info = "⏱️ 15 phút tới sẽ có tín hiệu đầu tiên. Chuẩn bị sẵn sàng nhé!"
-
-    return "\n".join([head_day, hello, rate_line, "", bias_line, "", coins_block, "", warn, next_info])
-
-
-# -------- optional: Telegram job --------
-async def send_morning_report(context, unit: str | None = None, recipient_name: str | None = None):
-    """
-    Dùng với JobQueue:
-        j.run_daily(send_morning_report, time=dt_time(6,0,tzinfo=VN_TZ))
-    """
-    chat_id = ALLOWED_USER_ID
-    text = build_morning_text(unit=unit, recipient_name=recipient_name)
-    await context.bot.send_message(chat_id, text)
-
-def schedule_morning_job(app, name: str | None = None, unit: str | None = None):
-    """Gọi trong build_app() nếu muốn lên lịch cố định 06:00 VN time."""
-    j = app.job_queue
-    j.run_daily(
-        send_morning_report,
-        time=dt_time(6, 0, tzinfo=VN_TZ),
-        data={"unit": unit, "name": name},
-        name="morning_report_06h"
-    )
+    head_day = f"📅 {weekday_vi(now)}, {now.strftime('%d/%m/%
