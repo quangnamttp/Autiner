@@ -27,7 +27,7 @@ from settings import (
 
 # ===== domain modules =====
 # Giá hiển thị (bạn đã có file này)
-from Autiner.bots.pricing.onus_format import display_price
+from Autiner.bots.pricing.price_format import display_price
 
 # Morning/Night (bạn đã có 2 file này — nếu chưa, bot sẽ bỏ qua lịch)
 try:
