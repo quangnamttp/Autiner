@@ -4,20 +4,13 @@
 Webhook server (FastAPI) cho Telegram bot + tự ping keep-alive cho Render.
 
 • Endpoint:
-  - GET  /            -> "OK" (health)
-  - GET  /health      -> "OK" (health)
-  - POST /tg/<TOKEN>  -> Webhook Telegram (TOKEN lấy từ env TELEGRAM_BOT_TOKEN)
-
-• Khởi động:
-  - build_app() từ bots/telegram_bot/telegram_bot.py
-  - initialize + start Application (python-telegram-bot v20+)
-  - setWebhook về WEBHOOK_BASE_URL + /tg/<TOKEN>
-  - tạo background task tự ping /health mỗi 4 phút
+  - GET/HEAD  /          -> "OK" (health)
+  - GET/HEAD  /health    -> "OK" (health)
+  - POST      /tg/<TOKEN>-> Webhook Telegram (TOKEN lấy từ env TELEGRAM_BOT_TOKEN)
 
 ENV cần:
-  TELEGRAM_BOT_TOKEN   (bắt buộc)
-  WEBHOOK_BASE_URL     (ví dụ: https://autiner.onrender.com)
-  TZ_NAME, ALLOWED_USER_ID, DEFAULT_UNIT, ...
+  TELEGRAM_BOT_TOKEN (bắt buộc)
+  WEBHOOK_BASE_URL   (ví dụ: https://autiner.onrender.com)
 """
 
 from __future__ import annotations
@@ -33,7 +26,7 @@ from telegram.ext import Application
 
 from settings import TELEGRAM_BOT_TOKEN
 
-# ====== ĐỔI IMPORT THEO CÁCH A (từ root: bots/...) ======
+# dùng cấu trúc repo: bots/...
 from bots.telegram_bot.telegram_bot import build_app as build_telegram_application
 
 # ---------- FastAPI ----------
@@ -43,9 +36,9 @@ app = FastAPI(title="Autiner Webhook")
 _application: Optional[Application] = None
 _self_ping_task = None
 
-# ---------- Health endpoints ----------
-@app.get("/", response_class=PlainTextResponse)
-@app.get("/health", response_class=PlainTextResponse)
+# ---------- Health endpoints (GET + HEAD để Render health-check không 405) ----------
+@app.api_route("/", methods=["GET", "HEAD"], response_class=PlainTextResponse)
+@app.api_route("/health", methods=["GET", "HEAD"], response_class=PlainTextResponse)
 async def health() -> str:
     return "OK"
 
