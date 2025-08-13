@@ -1,3 +1,4 @@
+# Autiner/bots/telegram_bot/telegram_bot.py
 # -*- coding: utf-8 -*-
 """
 Autiner Telegram Bot (v2)
@@ -26,10 +27,10 @@ from settings import (
 )
 
 # ===== domain modules =====
-# Giá hiển thị (bạn đã có file này)
-from Autiner.bots.pricing.price_format import display_price
+# (Không bắt buộc dùng trực tiếp ở file này nhưng để sẵn nếu muốn hiển thị giá lẻ)
+# from Autiner.bots.pricing.price_format import display_price
 
-# Morning/Night (bạn đã có 2 file này — nếu chưa, bot sẽ bỏ qua lịch)
+# Morning/Night
 try:
     from Autiner.bots.pricing.morning_report import build_morning_text
 except Exception:
@@ -41,20 +42,28 @@ except Exception:
     build_night_message = None
 
 # MEXC client để kiểm tra live + nuôi dữ liệu
-from Autiner.bots.mexc_client import fetch_tickers, fetch_funding, fetch_klines_1m, get_usd_vnd_rate, health_ping
+from Autiner.bots.mexc_client import fetch_tickers, get_usd_vnd_rate, health_ping
 
-# Signal Engine (nếu bạn đã có). Nếu chưa, rơi về mexc_api.smart_pick_signals cũ.
+# ===== Signal Engine =====
+# ĐÚNG PATH + TÊN HÀM theo repo của bạn
 _signal_fn = None
 try:
-    from Autiner.core.signal_engine import generate_signals  # (unit, n) -> list[dict]
-    _signal_fn = generate_signals
+    from Autiner.bots.signals.signal_engine import generate_scalping_signals as _signal_fn
 except Exception:
-    try:
-        # fallback lịch sử (nếu repo bạn có sẵn)
-        from Autiner.bots.mexc_api import smart_pick_signals as _legacy_smart_pick
-        _signal_fn = lambda unit, n: _legacy_smart_pick(unit, n)[0]  # lấy list signals
-    except Exception:
-        _signal_fn = None
+    _signal_fn = None
+
+def _call_signals(unit: str, n: int):
+    """
+    Chuẩn hoá kết quả trả về từ engine:
+    - Nếu engine trả (signals, highlights, live, rate) -> lấy signals
+    - Nếu lỡ trả list -> dùng trực tiếp
+    """
+    if not _signal_fn:
+        return []
+    out = _signal_fn(unit, n)
+    if isinstance(out, tuple):
+        return out[0] or []
+    return out or []
 
 # ===== globals =====
 VN_TZ = pytz.timezone(TZ_NAME)
@@ -119,7 +128,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard(update): return
-    # kiểm tra nhanh: gọi ticker 1 lần
     tick = await _to_thread(fetch_tickers, timeout=8)
     live = bool(tick)
     await update.effective_chat.send_message(
@@ -155,18 +163,17 @@ async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 06:00 sample
     if build_morning_text:
-        usd_vnd = await _to_thread(get_usd_vnd_rate, timeout=8)
-        text6 = await _to_thread(build_morning_text, _current_unit, "Trương", timeout=10)
+        text6 = await _to_thread(build_morning_text, _current_unit, "Trương", timeout=12)
         if text6:
             await context.bot.send_message(chat_id, text6)
 
     # tín hiệu
     if not _signal_fn:
-        await context.bot.send_message(chat_id, "⚠️ Chưa có Signal Engine. Vui lòng thêm Autiner/core/signal_engine.py", reply_markup=main_keyboard())
+        await context.bot.send_message(chat_id, "⚠️ Chưa có Signal Engine. Vui lòng thêm Autiner/bots/signals/signal_engine.py", reply_markup=main_keyboard())
         return
 
     await context.bot.send_message(chat_id, "🧪 Đang tạo tín hiệu thử...", reply_markup=main_keyboard())
-    sigs = await _to_thread(_signal_fn, _current_unit, NUM_SCALPING, timeout=28)
+    sigs = await _to_thread(_call_signals, _current_unit, NUM_SCALPING, timeout=28)
     if not sigs:
         await context.bot.send_message(chat_id, "⚠️ Chưa đủ dữ liệu / engine trả rỗng.", reply_markup=main_keyboard())
         return
@@ -217,7 +224,7 @@ async def send_batch_scalping(context: ContextTypes.DEFAULT_TYPE):
         return
     chat_id = ALLOWED_USER_ID
 
-    sigs = await _to_thread(_signal_fn, _current_unit, NUM_SCALPING, timeout=30)
+    sigs = await _to_thread(_call_signals, _current_unit, NUM_SCALPING, timeout=30)
     if not sigs:
         now = vn_now()
         nxt_hhmm, mins = next_slot_info(now)
@@ -262,7 +269,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await toggle_auto(update, context)
     if "test" in txt:
         return await test_cmd(update, context)
-    if "mexc" in txt or "đơn vị" in txt or "usd" in txt or "vnd" in txt:
+    if "mexc" in txt or "đơn vị" in txt hoặc "usd" in txt hoặc "vnd" in txt:
         return await toggle_unit(update, context)
 
     await update.effective_chat.send_message("Mời chọn từ menu bên dưới.", reply_markup=main_keyboard())
