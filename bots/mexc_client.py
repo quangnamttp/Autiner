@@ -1,3 +1,4 @@
+# bots/mexc_client.py
 # -*- coding: utf-8 -*-
 """
 MEXC Futures Client (HTTP bền vững + health ping)
@@ -9,7 +10,7 @@ MEXC Futures Client (HTTP bền vững + health ping)
 """
 
 from __future__ import annotations
-import os, time, hmac, hashlib
+import os, time, hmac, hashlib, random
 from typing import List, Dict
 import requests
 
@@ -27,30 +28,38 @@ _HEADERS = {
     "Accept": "application/json",
 }
 if API_KEY:
-    _HEADERS["ApiKey"] = API_KEY  # một số endpoint private cần header này
+    # Một số tài liệu dùng ApiKey, có SDK dùng X-MEXC-APIKEY → set cả hai để an toàn
+    _HEADERS["ApiKey"] = API_KEY
+    _HEADERS["X-MEXC-APIKEY"] = API_KEY
+
+# Đẩy header mặc định vào session cho mọi request
+_session.headers.update(_HEADERS)
+
 
 def _get_json(url: str, params: Dict | None = None, signed: bool = False):
     """
-    Getter chung có retry/backoff.
+    Getter chung có retry/backoff + jitter.
     signed=True để minh hoạ (market data không cần ký).
     """
     for attempt in range(max(1, HTTP_RETRY)):
         try:
+            req_params = dict(params or {})
             if signed and API_KEY and API_SECRET:
-                # NOTE: Market data của MEXC là public; phần ký chỉ để mở rộng sau này (account, order)
-                params = params or {}
-                params["timestamp"] = int(time.time() * 1000)
-                qs = "&".join([f"{k}={params[k]}" for k in sorted(params)])
+                # NOTE: Market data của MEXC là public; ký dành cho private endpoints
+                req_params["timestamp"] = int(time.time() * 1000)
+                qs = "&".join([f"{k}={req_params[k]}" for k in sorted(req_params)])
                 sig = hmac.new(API_SECRET.encode(), qs.encode(), hashlib.sha256).hexdigest()
-                params["signature"] = sig
+                req_params["signature"] = sig
 
-            r = _session.get(url, params=params, headers=_HEADERS, timeout=HTTP_TIMEOUT)
+            r = _session.get(url, params=req_params, timeout=HTTP_TIMEOUT)
             if r.status_code == 200:
                 return r.json()
-            time.sleep(0.2 * (attempt + 1))
+            # backoff có jitter để tránh đụng rate limit
+            time.sleep(0.2 * (attempt + 1) + random.uniform(0, 0.15))
         except Exception:
-            time.sleep(0.2 * (attempt + 1))
+            time.sleep(0.2 * (attempt + 1) + random.uniform(0, 0.15))
     return None
+
 
 def get_usd_vnd_rate() -> float:
     js = _get_json(USDVND_URL)
@@ -59,9 +68,10 @@ def get_usd_vnd_rate() -> float:
     except Exception:
         return 0.0
 
+
 def fetch_tickers() -> List[Dict]:
     js = _get_json(MEXC_TICKER_URL)
-    out = []
+    out: List[Dict] = []
     rows = []
     if isinstance(js, dict) and (js.get("success") or "data" in js):
         rows = js.get("data") or []
@@ -75,24 +85,26 @@ def fetch_tickers() -> List[Dict]:
         # last
         try:
             last = float(it.get("lastPrice") or it.get("last") or it.get("price") or it.get("close") or 0.0)
-        except:
+        except Exception:
             last = 0.0
         # quoteVol 24h (USDT)
         try:
             qv = float(it.get("quoteVol") or it.get("amount24") or it.get("turnover") or it.get("turnover24") or 0.0)
-        except:
+        except Exception:
             qv = 0.0
-        # % change 24h
+        # % change 24h (có API trả tỉ lệ, có API trả %)
         try:
             raw = it.get("riseFallRate") or it.get("changeRate") or it.get("percent") or 0
             chg = float(raw)
+            # nếu |chg| < 1 coi như tỉ lệ → quy về %
             if abs(chg) < 1.0:
                 chg *= 100.0
-        except:
+        except Exception:
             chg = 0.0
 
         out.append({"symbol": str(sym), "last": last, "qv": qv, "chg": chg})
     return out
+
 
 def fetch_funding() -> Dict[str, float]:
     js = _get_json(MEXC_FUNDING_URL)
@@ -124,6 +136,7 @@ def fetch_funding() -> Dict[str, float]:
                 if isinstance(it, dict) and k in it:
                     val = it[k]; break
             fr = float(val) if val is not None else 0.0
+            # chuẩn về %
             if abs(fr) < 1.0:
                 fr = fr * 100.0
             fmap[str(s)] = fr
@@ -131,10 +144,17 @@ def fetch_funding() -> Dict[str, float]:
             continue
     return fmap
 
+
 def fetch_klines_1m(symbol: str, limit: int = 120) -> List[Dict]:
-    url = MEXC_KLINES_URL.format(sym=symbol)
+    # Nếu URL hỗ trợ placeholder {limit} thì chèn; nếu không thì dùng bản không limit
+    url = MEXC_KLINES_URL
+    if "{limit}" in url:
+        url = url.format(sym=symbol, limit=min(limit, 120))
+    else:
+        url = url.format(sym=symbol)
+
     js = _get_json(url)
-    out = []
+    out: List[Dict] = []
     rows = []
     if isinstance(js, dict) and "data" in js:
         rows = js.get("data") or []
@@ -156,6 +176,7 @@ def fetch_klines_1m(symbol: str, limit: int = 120) -> List[Dict]:
                 pass
     out.sort(key=lambda x: x["t"])
     return out[-min(limit, 120):]
+
 
 def health_ping() -> bool:
     """
