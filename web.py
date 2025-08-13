@@ -33,16 +33,14 @@ from telegram.ext import Application
 
 from settings import TELEGRAM_BOT_TOKEN
 
-# app PTB đã được cấu hình handler + jobs bên trong
-# (file bạn đã có: Autiner/bots/telegram_bot/telegram_bot.py)
-from Autiner.bots.telegram_bot.telegram_bot import build_app as build_telegram_application
+# ====== ĐỔI IMPORT THEO CÁCH A (từ root: bots/...) ======
+from bots.telegram_bot.telegram_bot import build_app as build_telegram_application
 
 # ---------- FastAPI ----------
 app = FastAPI(title="Autiner Webhook")
 
 # Globals
 _application: Optional[Application] = None
-_webhook_task = None
 _self_ping_task = None
 
 # ---------- Health endpoints ----------
@@ -56,16 +54,14 @@ async def health() -> str:
 async def telegram_webhook(req: Request) -> Response:
     global _application
     if _application is None:
-        # chưa sẵn sàng
-        return Response(status_code=503)
-    data = await req.json()
+        return Response(status_code=503)  # chưa sẵn sàng
     try:
+        data = await req.json()
         update = Update.de_json(data=data, bot=_application.bot)
         # đẩy vào hàng đợi để PTB xử lý (không block FastAPI)
         await _application.update_queue.put(update)
     except Exception:
-        # dữ liệu không hợp lệ
-        return Response(status_code=400)
+        return Response(status_code=400)  # payload không hợp lệ
     return Response(status_code=200)
 
 # ---------- Tự ping giữ dịch vụ không ngủ ----------
@@ -84,23 +80,26 @@ async def _self_ping_loop():
         await asyncio.sleep(240)  # 4 phút
 
 # ---------- Đăng ký webhook với Telegram ----------
-async def _ensure_webhook(app: Application):
+async def _ensure_webhook(app_ptb: Application):
     base = os.getenv("WEBHOOK_BASE_URL", "").rstrip("/")
-    if not base:
+    if not base or not TELEGRAM_BOT_TOKEN:
         return
     path = f"/tg/{TELEGRAM_BOT_TOKEN}"
     url = base + path
     try:
-        await app.bot.set_webhook(url=url, allowed_updates=["message", "edited_message", "callback_query"])
+        await app_ptb.bot.set_webhook(
+            url=url,
+            allowed_updates=["message", "edited_message", "callback_query"]
+        )
     except Exception:
-        # Không lỗi hoá: nếu fail thì bạn vẫn có thể chuyển sang polling tạm thời (nếu muốn).
+        # Không raise: nếu fail bạn vẫn có thể chuyển hướng sang polling tạm
         pass
 
 # ---------- FastAPI lifecycle ----------
 @app.on_event("startup")
 async def on_startup():
     """
-    Khởi tạo PTB Application + set webhook + tự ping.
+    Khởi tạo PTB Application + set webhook + self-ping.
     """
     global _application, _self_ping_task
 
