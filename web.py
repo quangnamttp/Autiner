@@ -11,6 +11,7 @@ Webhook server (FastAPI) cho Telegram bot + tự ping keep-alive cho Render.
 ENV cần:
   TELEGRAM_BOT_TOKEN (bắt buộc)
   WEBHOOK_BASE_URL   (ví dụ: https://autiner.onrender.com)
+  SELF_PING_INTERVAL_SEC (tùy chọn, mặc định 300 = 5 phút)
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ app = FastAPI(title="Autiner Webhook")
 
 # Globals
 _application: Optional[Application] = None
-_self_ping_task = None
+_self_ping_task: Optional[asyncio.Task] = None
 
 # ---------- Health endpoints (GET + HEAD để Render health-check không 405) ----------
 @app.api_route("/", methods=["GET", "HEAD"], response_class=PlainTextResponse)
@@ -57,20 +58,37 @@ async def telegram_webhook(req: Request) -> Response:
         return Response(status_code=400)  # payload không hợp lệ
     return Response(status_code=200)
 
-# ---------- Tự ping giữ dịch vụ không ngủ ----------
+# ---------- Tự ping giữ dịch vụ không ngủ (mặc định 5 phút) ----------
 async def _self_ping_loop():
     base = os.getenv("WEBHOOK_BASE_URL", "").rstrip("/")
     if not base:
         return  # không tự ping nếu thiếu base url
-    import aiohttp
+
+    # Cho phép cấu hình khoảng ping, mặc định 300s (5 phút)
+    try:
+        interval = int(os.getenv("SELF_PING_INTERVAL_SEC", "300"))
+    except Exception:
+        interval = 300
+
+    # Đường dẫn ping — dùng /health cho nhẹ & rẻ
     url = f"{base}/health"
-    while True:
-        try:
-            async with aiohttp.ClientSession() as sess:
-                await sess.get(url, timeout=8)
-        except Exception:
-            pass
-        await asyncio.sleep(240)  # 4 phút
+
+    import aiohttp
+    # Dùng một ClientSession tái sử dụng để tiết kiệm kết nối
+    async with aiohttp.ClientSession() as sess:
+        while True:
+            try:
+                # dùng HEAD trước, nếu server/proxy không hỗ trợ thì fallback GET
+                async with sess.head(url, timeout=8) as _:
+                    pass
+            except Exception:
+                try:
+                    async with sess.get(url, timeout=8) as _:
+                        pass
+                except Exception:
+                    # nuốt lỗi — chỉ là keep-alive
+                    pass
+            await asyncio.sleep(max(60, interval))  # tối thiểu 60s phòng cấu hình sai
 
 # ---------- Đăng ký webhook với Telegram ----------
 async def _ensure_webhook(app_ptb: Application):
