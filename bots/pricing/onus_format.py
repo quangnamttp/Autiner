@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Cách tính giá ONUS cho hiển thị bot/tín hiệu.
-- Auto‑denom: …1000 / …1M cho coin siêu nhỏ
+- Auto-denom: …1000 / …1M cho coin siêu nhỏ
 - Áp tick size theo từng cặp để số lẻ/giá đúng như UI sàn (BONK1000 3 lẻ, SHIB1000 2 lẻ…)
 - VND: dùng dấu chấm ngăn nghìn, ROUND_DOWN (không làm tròn lên)
 - USD: >=1000 không lẻ; 1.. <1000 2 lẻ; <1 tối đa ~7 lẻ
@@ -31,6 +31,14 @@ def _rd(x: float, n: int) -> Decimal:
 def _dot(s: str) -> str:
     return s.replace(",", ".")
 
+def _root_from_symbol(symbol: str) -> str:
+    """
+    Lấy phần gốc trước dấu '_' nếu có (VD: 'PEPE_USDT' -> 'PEPE').
+    Nếu không có '_' thì trả nguyên chuỗi.
+    """
+    s = str(symbol or "")
+    return s.split("_", 1)[0] if "_" in s else s
+
 def is_small_name(name: str) -> bool:
     return any(str(name).endswith(s) for s in SMALL_DENOM_SUFFIXES)
 
@@ -43,13 +51,14 @@ def auto_denom(symbol: str, last_usd: float, vnd_rate: float) -> tuple[str, floa
     - else giữ nguyên
     Ngoài ra ép hậu tố với FORCE_DENOM để nhất quán hiển thị.
     """
-    root = str(symbol).replace("_USDT", "")
+    root = _root_from_symbol(symbol)
     if root in FORCE_DENOM:
         tag = FORCE_DENOM[root]
         mul = 1_000_000.0 if tag == "1M" else 1_000.0
         return f"{root}{tag}", (last_usd or 0.0) * mul, mul
 
-    base_vnd = (last_usd or 0.0) * (vnd_rate or 0.0)
+    rate = float(vnd_rate or 0.0)
+    base_vnd = (last_usd or 0.0) * rate
     if base_vnd < 0.001:
         return f"{root}1M",  (last_usd or 0.0) * 1_000_000.0, 1_000_000.0
     if base_vnd < 1.0:
@@ -63,7 +72,8 @@ def fmt_usd_onus(val_usd: float) -> str:
         return _dot(f"{int(x):,}")               # không thập phân
     if x >= 1:
         return _dot(f"{_rd(x,2):,.2f}")          # 2 lẻ, ROUND_DOWN
-    return f"{_rd(x,7):f}".rstrip("0").rstrip(".")  # <1: tối đa ~7 lẻ
+    # nhỏ hơn 1: tối đa ~7 lẻ, bỏ đuôi 0
+    return f"{_rd(x,7):f}".rstrip("0").rstrip(".")
 
 def fmt_vnd_onus(val_vnd: float, small: bool, decimals: int | None = None) -> str:
     """
@@ -84,7 +94,7 @@ def fmt_vnd_onus(val_vnd: float, small: bool, decimals: int | None = None) -> st
     return _dot(f"{_rd(x,4):,.4f}")
 
 # ---------------- tick-size layer ----------------
-# Tick theo **đơn vị hiển thị** (VND hoặc USD sau auto‑denom)
+# Tick theo **đơn vị hiển thị** (VND hoặc USD sau auto-denom)
 TICK_VND = {
     # coin mệnh giá nhỏ (đúng như app bạn chụp)
     "PEPE1000": 0.0001,   # 4 lẻ  → 268.7316
@@ -101,7 +111,7 @@ TICK_VND = {
 TICK_USD = {
     "BTC": 1,
     "ETH": 0.01,
-    # coin siêu nhỏ sau auto‑denom thường <1 USD -> 7 lẻ là đủ, không cần tick
+    # coin siêu nhỏ sau auto-denom thường <1 USD -> 7 lẻ là đủ (tick=0)
 }
 
 def _infer_tick_vnd(price_vnd: float, small: bool) -> float:
@@ -114,11 +124,26 @@ def _infer_tick_vnd(price_vnd: float, small: bool) -> float:
         return 0.01
     return 0.0001
 
+def _infer_tick_usd(price_usd: float, small: bool) -> float:
+    """
+    Fallback tick cho USD: giữ đúng quy tắc format USD.
+    - >=1000: tick 1
+    - 1.. <1000: tick 0.01
+    - <1: tick 0 (để hiển thị tới 7 lẻ theo ONUS)
+    """
+    x = float(price_usd or 0.0)
+    if x >= 1_000:
+        return 1.0
+    if x >= 1.0:
+        return 0.01
+    return 0.0
+
 def _lookup_tick(name: str, unit: str, price_val: float, small: bool) -> float:
     root = name.replace("1M", "").replace("1000", "")
     if unit.upper() == "VND":
         return TICK_VND.get(name) or TICK_VND.get(root) or _infer_tick_vnd(price_val, small)
-    return TICK_USD.get(name) or TICK_USD.get(root) or 0.0
+    # USD
+    return TICK_USD.get(name) or TICK_USD.get(root) or _infer_tick_usd(price_val, small)
 
 def _decimals_from_tick(tick: float) -> int:
     s = f"{tick:.10f}".rstrip("0").rstrip(".")
@@ -134,23 +159,25 @@ def round_down_to_tick(value: float, tick: float) -> float:
 # ---------------- public API ----------------
 def display_price(symbol: str, last_usd: float, vnd_rate: float, unit: str = "VND") -> tuple[str, str]:
     """
-    Tính tên hiển thị & giá hiển thị theo ONUS (auto‑denom + tick-size + format).
+    Tính tên hiển thị & giá hiển thị theo ONUS (auto-denom + tick-size + format).
     - symbol: 'PEPE_USDT', 'BTC_USDT', ...
-    - last_usd: giá USD gốc từ sàn (chưa auto‑denom)
+    - last_usd: giá USD gốc từ sàn (chưa auto-denom)
     - vnd_rate: tỷ giá USD→VND hiện tại
     - unit: 'VND' | 'USD'
     Trả: (display_name, price_str)
     """
-    name, adj_usd, _mul = auto_denom(symbol, last_usd, vnd_rate)
+    safe_rate = float(vnd_rate or 0.0)
+    name, adj_usd, _mul = auto_denom(symbol, last_usd, safe_rate)
     small = is_small_name(name)
 
     if unit.upper() == "USD":
         tick = _lookup_tick(name, "USD", adj_usd, small)
         val = round_down_to_tick(adj_usd, tick)
+        # USD format tự quyết số lẻ, không ép decimals khi <1
         return name, fmt_usd_onus(val)
 
     # VND
-    val_vnd = adj_usd * (vnd_rate or 0.0)
+    val_vnd = adj_usd * safe_rate
     tick = _lookup_tick(name, "VND", val_vnd, small)
     val_vnd = round_down_to_tick(val_vnd, tick)
     dec = _decimals_from_tick(tick) if tick else None
