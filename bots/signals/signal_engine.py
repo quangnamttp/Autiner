@@ -45,7 +45,7 @@ from settings import (
 )
 
 # ONUS price formatter (bắt buộc có file này theo bạn đã cung cấp)
-from Autiner.bots.pricing.onus_format import display_price  # (name, price_str) = display_price(symbol, last_usd, vnd_rate, unit)
+from Autiner.bots.pricing.price_format import display_price
 
 # ===== Session & cache =====
 _session = requests.Session()
