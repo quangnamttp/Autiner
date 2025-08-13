@@ -6,7 +6,7 @@ Autiner Telegram Bot (v2, webhook-friendly)
 - Slot: 06:15 → 21:45 mỗi 30' (THÔNG BÁO trước ~1 phút)
 - Gọi: morning_report (06:00) & night_summary (22:00) nếu có
 - Không block event-loop: tác vụ nặng chạy trong thread + timeout
-- Có lệnh chẩn đoán: 'diag'
+- Có lệnh chẩn đoán: /diag
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ try:
 except Exception:
     build_night_message = None
 
-# MEXC client để kiểm tra live + nuôi dữ liệu
+# MEXC client
 from bots.mexc_client import fetch_tickers, get_usd_vnd_rate, health_ping
 
 # ===== Signal Engine =====
@@ -92,10 +92,9 @@ def next_slot_info(now: datetime) -> tuple[str, int]:
     return nxt.strftime("%H:%M"), mins
 
 def _pre_time(h: int, m: int) -> tuple[int, int]:
-    """Tính thời điểm trước 1 phút cho lịch thông báo."""
+    """Thời điểm trước 1 phút cho lịch thông báo."""
     if m > 0:
         return h, m - 1
-    # m == 0
     return (h - 1) % 24, 59
 
 # ===== UI =====
@@ -249,7 +248,7 @@ except Exception:
     _se_snapshot = None
 
 async def diag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gõ 'diag' để xem engine & nguồn dữ liệu."""
+    """Lệnh /diag: hiển thị tình trạng engine & nguồn dữ liệu."""
     if not guard(update): return
     engine_ok = (_signal_fn is not None)
     ticks = await _to_thread(fetch_tickers, timeout=10)
@@ -291,10 +290,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def build_app() -> Application:
     app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("test", test_cmd))   # cho phép /test
+    app.add_handler(CommandHandler("diag", diag_cmd))   # cho phép /diag
+
+    # Texts
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), on_text))
 
+    # Jobs (nếu cài job-queue)
     j = app.job_queue
     if j is not None:
         # 06:00 chào buổi sáng (nếu có file)
