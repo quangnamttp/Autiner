@@ -24,7 +24,7 @@ from settings import (
 
 # ⚠️ Bạn đã có file này rồi:
 # Autiner/bots/pricing/onus_format.py  (chỉ import dùng, không chỉnh ở đây)
-from .onus_format import display_price  # (display_name, price_str) = display_price(symbol, last_usd, vnd_rate, unit)
+from .price_format import display_price
 
 VN_TZ = pytz.timezone(TZ_NAME)
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124 Safari/537.36"}
