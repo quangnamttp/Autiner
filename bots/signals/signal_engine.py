@@ -1,4 +1,4 @@
-# Autiner/bots/signals/signal_engine.py
+# bots/signals/signal_engine.py
 # -*- coding: utf-8 -*-
 """
 Autiner — Signal Engine (Scalping, pro)
@@ -22,8 +22,8 @@ from settings import (
     DIVERSITY_POOL_TOPN, SAME_PRICE_EPS, REPEAT_BONUS_DELTA,
 )
 
-# ✅ Đúng tên file formatter bạn đang dùng
-from Autiner.bots.pricing.onus_format import display_price
+# Dùng đúng formatter theo đường dẫn repo hiện tại
+from bots.pricing.onus_format import display_price
 
 _session = requests.Session()
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124 Safari/537.36"}
@@ -335,125 +335,4 @@ def _analyze_klines_for(sym: str) -> dict:
 def generate_scalping_signals(unit: str = "VND", n_scalp: int = 5):
     global _last_batch, _prev_volume
     coins, live, rate = market_snapshot(unit="USD", topn=DIVERSITY_POOL_TOPN)
-    if not live or not coins:
-        return [], [], live, rate
-    for c in coins:
-        dq = _hist_px.setdefault(c["symbol"], deque(maxlen=3))
-        dq.append(float(c["lastPrice"]))
-    pool = []
-    prev_vol_map = {c["symbol"]: _prev_volume.get(c["symbol"], 0.0) for c in coins}
-    for idx, c in enumerate(coins):
-        score, r30, r60 = _score_coin(idx, c, prev_vol_map.get(c["symbol"], 0.0))
-        feats = _analyze_klines_for(c["symbol"])
-        if not feats.get("ok"):
-            continue
-        pool.append((score, r30, r60, idx, c, feats))
-    if not pool:
-        return [], [], live, rate
-
-    scores_only = [p[0] for p in pool]
-    median = sorted(scores_only)[len(scores_only)//2]
-    keep = []
-    for score, r30, r60, idx, c, feats in pool:
-        if c["symbol"] in _last_batch:
-            if score >= median + REPEAT_BONUS_DELTA:
-                keep.append((score, r30, r60, idx, c, feats))
-        else:
-            keep.append((score, r30, r60, idx, c, feats))
-    if not keep:
-        keep = pool
-
-    keep.sort(key=lambda x: x[0], reverse=True)
-    probs = _softmax([k[0] for k in keep])
-    bag, p = keep[:], probs[:]
-    picked = []
-    for _ in range(min(n_scalp, len(bag))):
-        r = random.random()
-        acc = 0.0
-        chosen_idx = 0
-        for i, w in enumerate(p):
-            acc += w
-            if r <= acc:
-                chosen_idx = i
-                break
-        picked.append(bag.pop(chosen_idx))
-        p.pop(chosen_idx)
-        if p:
-            s = sum(p)
-            p = [x/s for x in p]
-
-    signals = []
-    highlights = []
-    usd_vnd = usd_vnd_rate()
-    for rank, (score, r30, r60, idx, c, feats) in enumerate(picked):
-        funding = c.get("fundingRate", 0.0)
-        ema_up  = feats["trend_up"]
-        rsi14   = feats["rsi14"]
-        want_mk = _need_market(
-            feats["break_retest_ok"], feats["vol_mult"],
-            funding, r30, r60, ema_up, rsi14
-        )
-        accel = r30 - 0.5*r60
-        side = "LONG" if (r30 > 0 and accel >= 0) else "SHORT"
-        atr = max(0.0, float(feats["atr"]))
-        px_usd_now = float(feats["last_close"])
-
-        if side == "LONG":
-            entry_mid_usd = px_usd_now - ATR_ENTRY_K * atr
-            zone_lo_usd   = entry_mid_usd - (ATR_ZONE_K * atr) / 2
-            zone_hi_usd   = entry_mid_usd + (ATR_ZONE_K * atr) / 2
-            tp_usd        = px_usd_now + ATR_TP_K * atr
-            sl_usd        = px_usd_now - ATR_SL_K * atr
-        else:
-            entry_mid_usd = px_usd_now + ATR_ENTRY_K * atr
-            zone_lo_usd   = entry_mid_usd - (ATR_ZONE_K * atr) / 2
-            zone_hi_usd   = entry_mid_usd + (ATR_ZONE_K * atr) / 2
-            tp_usd        = px_usd_now - ATR_TP_K * atr
-            sl_usd        = px_usd_now + ATR_SL_K * atr
-
-        unit_tag = unit.upper()
-        token_name, price_now_txt = display_price(c["symbol"], px_usd_now, usd_vnd, unit_tag)
-        _, tp_txt  = display_price(c["symbol"], tp_usd,      usd_vnd, unit_tag)
-        _, sl_txt  = display_price(c["symbol"], sl_usd,      usd_vnd, unit_tag)
-
-        if want_mk:
-            entry_txt = f"{price_now_txt} {unit_tag}"
-            order_type = "Market"
-        else:
-            _, lo_txt = display_price(c["symbol"], zone_lo_usd, usd_vnd, unit_tag)
-            _, hi_txt = display_price(c["symbol"], zone_hi_usd, usd_vnd, unit_tag)
-            order_type = "Limit"
-            entry_txt = f"{lo_txt}–{hi_txt} {unit_tag}  (TTL {TTL_MINUTES}’)"
-
-        strength = int(max(35, min(95, 65 + score*8 - rank*3)))
-        ctx = {
-            "r30": r30, "r60": r60, "accel": accel,
-            "vol_mult": feats["vol_mult"],
-            "funding": funding,
-            "ema9": feats["ema9"], "ema21": feats["ema21"],
-            "rsi14": rsi14
-        }
-        reason = _build_reason("MARKET" if want_mk else "LIMIT", ctx)
-
-        signals.append({
-            "token": token_name,
-            "side": side,
-            "type": "Scalping",
-            "orderType": order_type,
-            "entry": entry_txt,
-            "tp": f"{tp_txt} {unit_tag}",
-            "sl": f"{sl_txt} {unit_tag}",
-            "strength": strength,
-            "reason": reason,
-            "unit": unit_tag
-        })
-
-    _last_batch = {c["symbol"] for (_,_,_,_,c,_) in picked}
-    _prev_volume = {c["symbol"]: c.get("volumeQuote", 0.0) for c in coins}
-
-    return signals, highlights, live, usd_vnd
-
-# ✅ Wrapper tương thích Telegram bot (trả đúng list)
-def generate_signals(unit: str = "VND", n: int = 5):
-    sigs, _, _, _ = generate_scalping_signals(unit=unit, n_scalp=n)
-    return sigs
+    if not live or not
