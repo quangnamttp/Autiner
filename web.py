@@ -1,27 +1,26 @@
-# -*- coding: utf-8 -*-
+# web.py — chạy Telegram bot bằng WEBHOOK (python-telegram-bot v20+)
 import os
-from fastapi import FastAPI
+from bots.telegram_bot.telegram_bot import build_app
+from settings import TELEGRAM_BOT_TOKEN
 
-app = FastAPI(title="Autiner Web")
+def main():
+    port = int(os.getenv("PORT", "10000"))              # Render sẽ set PORT
+    base = os.getenv("WEBHOOK_BASE_URL", "").rstrip("/")  # https://<your-service>.onrender.com
+    if not TELEGRAM_BOT_TOKEN or not base:
+        raise SystemExit("Missing TELEGRAM_BOT_TOKEN or WEBHOOK_BASE_URL")
 
-@app.get("/")
-def root():
-    return {"ok": True, "service": "autiner-web"}
+    webhook_url = f"{base}/{TELEGRAM_BOT_TOKEN}"
 
-@app.get("/healthz")
-def healthz():
-    # báo trạng thái một số ENV (mask secret)
-    mexc_key = os.getenv("MEXC_API_KEY", "")
-    key_mask = (mexc_key[:4] + "..." + mexc_key[-3:]) if len(mexc_key) >= 8 else ("set" if mexc_key else "unset")
-    return {
-        "status": "ok",
-        "tz": os.getenv("TZ_NAME", "Asia/Ho_Chi_Minh"),
-        "unit": os.getenv("DEFAULT_UNIT", "VND"),
-        "telegram": "set" if os.getenv("TELEGRAM_BOT_TOKEN") else "unset",
-        "mexc_api_key": key_mask,
-    }
+    application = build_app()
+
+    # Chạy server aiohttp bên trong PTB + set webhook
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=TELEGRAM_BOT_TOKEN,   # endpoint: /<TOKEN>
+        webhook_url=webhook_url,       # URL công khai Telegram sẽ gọi
+        drop_pending_updates=True,
+    )
 
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("web:app", host="0.0.0.0", port=port, reload=False)
+    main()
