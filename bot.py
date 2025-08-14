@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 import pytz
 import httpx
 from settings import settings
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from decimal import Decimal, ROUND_DOWN
 
 logging.basicConfig(level=logging.INFO)
@@ -55,9 +55,21 @@ def build_menu():
         ]
     ])
 
+def build_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ["🔍 Trạng thái", "🟢 Auto ON" if STATE["AUTO_ON"] else "🔴 Auto OFF"],
+            ["🧪 Test", "💵 MEXC USD"]
+        ],
+        resize_keyboard=True
+    )
+
 # ==== Xử lý callback ====
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot tín hiệu MEXC đã sẵn sàng!", reply_markup=build_menu())
+    await update.message.reply_text(
+        "Bot tín hiệu MEXC đã sẵn sàng!",
+        reply_markup=build_reply_keyboard()
+    )
 
 async def status_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -122,6 +134,26 @@ async def send_night_summary(context: ContextTypes.DEFAULT_TYPE):
     txt = "🌙 Tổng kết cuối ngày..."
     await context.bot.send_message(chat_id=settings.TELEGRAM_ALLOWED_USER_ID, text=txt)
 
+# ==== Xử lý nút Reply Keyboard ====
+async def handle_reply_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text.startswith("🔍 Trạng thái"):
+        await context.bot.send_message(chat_id=update.effective_chat.id,
+                                       text=f"Auto: {'ON' if STATE['AUTO_ON'] else 'OFF'}\nCurrency: {STATE['CURRENCY']}\nTime: {vn_now()}",
+                                       reply_markup=build_reply_keyboard())
+    elif text.startswith("🟢 Auto ON") or text.startswith("🔴 Auto OFF"):
+        STATE["AUTO_ON"] = not STATE["AUTO_ON"]
+        await context.bot.send_message(chat_id=update.effective_chat.id,
+                                       text=f"Auto: {'ON' if STATE['AUTO_ON'] else 'OFF'}",
+                                       reply_markup=build_reply_keyboard())
+    elif text.startswith("🧪 Test"):
+        await send_signal_batch(context, update.effective_chat.id)
+    elif text.startswith("💵 MEXC USD"):
+        usd_vnd = await get_usd_vnd()
+        await context.bot.send_message(chat_id=update.effective_chat.id,
+                                       text=f"Tỷ giá USDT/VND: {usd_vnd}",
+                                       reply_markup=build_reply_keyboard())
+
 # ==== Scheduler ====
 async def auto_loop(app: Application):
     while True:
@@ -143,6 +175,7 @@ async def run_bot():
     app.add_handler(CallbackQueryHandler(toggle_auto_cb, pattern="^toggle_auto$"))
     app.add_handler(CallbackQueryHandler(toggle_ccy_cb, pattern="^toggle_ccy$"))
     app.add_handler(CallbackQueryHandler(test_cb, pattern="^test$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply_buttons))
     asyncio.create_task(auto_loop(app))
     await app.initialize()
     await app.start()
