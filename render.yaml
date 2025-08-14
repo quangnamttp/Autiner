@@ -7,12 +7,12 @@ services:
     startCommand: "python autiner_bot/main.py"
     envVars:
       - key: TELEGRAM_BOT_TOKEN
-        value: "YOUR_TELEGRAM_BOT_TOKEN"
+        value: "8301643771:AAG5pd8ruEYHzLI7AwkzAE6avjib8yPPJNI"
       - key: TELEGRAM_ALLOWED_USER_ID
-        value: "YOUR_TELEGRAM_USER_ID"
+        value: "5335165612"
       - key: MEXC_API_KEY
-        value: "YOUR_MEXC_API_KEY"
+        value: "mx0vgl8vcbqeQC9MYS"
       - key: MEXC_API_SECRET
-        value: "YOUR_MEXC_API_SECRET"
+        value: "3974e94436b0453da81fdb0289be0b8c"
       - key: TZ_NAME
         value: "Asia/Ho_Chi_Minh"
