@@ -33,16 +33,20 @@ async def webhook():
 def run_jobs():
     sched = BackgroundScheduler(timezone=S.TZ_NAME)
 
-    # Morning message
+    # 06:00 — Chào buổi sáng
     sched.add_job(lambda: asyncio.run(scheduler.job_morning_message()), "cron", hour=6, minute=0)
 
-    # Báo trước tín hiệu 1 phút
-    sched.add_job(lambda: asyncio.run(scheduler.job_trade_signals_notice()), "cron", hour="6-21", minute="14,44")
+    # Mỗi 30 phút — Báo trước 1 phút rồi gửi tín hiệu
+    for h in range(6, 22):
+        for m in [15, 45]:
+            # Báo trước
+            sched.add_job(lambda: asyncio.run(scheduler.job_notice_before_signal()),
+                          "cron", hour=h, minute=m-1 if m > 0 else 59)
+            # Gửi tín hiệu
+            sched.add_job(lambda: asyncio.run(scheduler.job_trade_signals()),
+                          "cron", hour=h, minute=m)
 
-    # Tín hiệu giao dịch (mỗi 30 phút từ 06:15 đến 21:45)
-    sched.add_job(lambda: asyncio.run(scheduler.job_trade_signals()), "cron", hour="6-21", minute="15,45")
-
-    # Tổng kết
+    # 22:00 — Tổng kết phiên
     sched.add_job(lambda: asyncio.run(scheduler.job_summary()), "cron", hour=22, minute=0)
 
     sched.start()
