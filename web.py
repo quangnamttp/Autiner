@@ -6,29 +6,35 @@ from fastapi import FastAPI
 import httpx
 from bots.telegram_bot.telegram_bot import run_bot
 
+# Bật log toàn hệ thống
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Ping Render mỗi 5 phút để giữ bot sống
+# URL để ping giữ Render không ngủ
 PING_URL = os.getenv("PING_URL", "https://autiner.onrender.com")
+PING_INTERVAL = 300  # 5 phút
 
 @app.on_event("startup")
 async def startup_event():
-    # Chạy bot Telegram song song với FastAPI
-    asyncio.create_task(run_bot())
-    asyncio.create_task(self_ping_loop())
+    """Chạy bot Telegram và self-ping song song."""
+    loop = asyncio.get_event_loop()
+    loop.create_task(run_bot())
+    loop.create_task(self_ping_loop())
+    log.info("🚀 Bot và self-ping đã khởi chạy.")
 
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Bot is running"}
 
 async def self_ping_loop():
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                r = await client.get(PING_URL, timeout=10)
-                log.info(f"Pinged {PING_URL}, status {r.status_code}")
-            except Exception as e:
-                log.error(f"Ping failed: {e}")
-            await asyncio.sleep(300)  # 5 phút
+    """Ping chính app mỗi 5 phút để giữ cho Render không sleep."""
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(PING_URL)
+                log.info(f"[PING] {PING_URL} status={r.status_code}")
+        except Exception as e:
+            log.error(f"[PING ERROR] {e}")
+        await asyncio.sleep(PING_INTERVAL)
