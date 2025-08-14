@@ -1,4 +1,3 @@
-# autiner_bot/main.py
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler
@@ -16,28 +15,23 @@ application = Application.builder().token(S.TELEGRAM_BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", menu.start_command))
 application.add_handler(CallbackQueryHandler(menu.button_handler))
 
-
 async def init_bot():
     """Khởi tạo bot và set webhook"""
     await application.initialize()
     await application.start()
-    # Thay YOUR_DOMAIN bằng domain Render của bạn
     webhook_url = f"https://autiner.onrender.com/webhook/{S.TELEGRAM_BOT_TOKEN}"
     await application.bot.set_webhook(webhook_url)
     print(f"[WEBHOOK] Đã set webhook: {webhook_url}")
 
-
 @app.route("/")
 def home():
     return "Autiner Bot Running", 200
-
 
 @app.route(f"/webhook/{S.TELEGRAM_BOT_TOKEN}", methods=["POST"])
 async def webhook():
     update = Update.de_json(request.get_json(force=True), application.bot)
     await application.process_update(update)
     return "OK", 200
-
 
 def run_jobs():
     sched = BackgroundScheduler(timezone=S.TZ_NAME)
@@ -48,10 +42,8 @@ def run_jobs():
     # Mỗi 30 phút — Báo trước 1 phút rồi gửi tín hiệu
     for h in range(6, 22):
         for m in [15, 45]:
-            # Báo trước
             sched.add_job(lambda: asyncio.run(scheduler.job_trade_signals_notice()),
                           "cron", hour=h, minute=(m - 1 if m > 0 else 59))
-            # Gửi tín hiệu
             sched.add_job(lambda: asyncio.run(scheduler.job_trade_signals()),
                           "cron", hour=h, minute=m)
 
@@ -59,7 +51,6 @@ def run_jobs():
     sched.add_job(lambda: asyncio.run(scheduler.job_summary()), "cron", hour=22, minute=0)
 
     sched.start()
-
 
 if __name__ == "__main__":
     threading.Thread(target=lambda: asyncio.run(init_bot())).start()
