@@ -1,97 +1,60 @@
-# autiner/web.py
-# -*- coding: utf-8 -*-
-"""
-FastAPI Webhook + Scheduler Autiner
-- Kết hợp web server cho Telegram Webhook
-- Tích hợp luôn scheduler để gửi tín hiệu & ping 5 phút
-"""
-
-from fastapi import FastAPI, Request
+# web.py
 import asyncio
-import aiohttp
-import os
-import logging
-from datetime import datetime
-from telegram import Bot
-from telegram.constants import ParseMode
-from telegram.ext import Application
-import pytz
+import datetime as dt
+import httpx
+from fastapi import FastAPI
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from bots.telegram_bot.telegram_bot import send_signal_batch, send_morning_report, send_night_summary
+import settings
 
-# ======= LOGGING =======
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("autiner")
-
-# ======= SETTINGS =======
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-TZ_NAME = os.getenv("TZ_NAME", "Asia/Ho_Chi_Minh")
-
-# Tự import generate_signals từ signal_engine
-from bots.signals.signal_engine import generate_signals
-
-# ======= FASTAPI APP =======
+# Tạo FastAPI app
 app = FastAPI()
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "time": datetime.now().isoformat()}
+# Scheduler
+scheduler = AsyncIOScheduler(timezone="Asia/Ho_Chi_Minh")
 
-@app.post("/webhook")
-async def webhook(request: Request):
-    data = await request.json()
-    log.info(f"Webhook data: {data}")
-    return {"ok": True}
-
-# ======= PING RENDER =======
+# Ping tới chính Render để không bị sleep
 PING_URL = "https://autiner.onrender.com"
 
 async def ping_self():
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(PING_URL) as resp:
-                log.info(f"Ping {PING_URL} => {resp.status}")
-        except Exception as e:
-            log.error(f"Ping error: {e}")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(PING_URL)
+            print(f"[PING] {dt.datetime.now()} → {r.status_code}")
+    except Exception as e:
+        print(f"[PING ERROR] {e}")
 
-# ======= SEND SIGNALS =======
-async def send_signals():
-    bot = Bot(token=TELEGRAM_TOKEN)
-    tz = pytz.timezone(TZ_NAME)
-    now = datetime.now(tz).strftime("%H:%M:%S")
-    signals = generate_signals(unit="VND", n=5)
-    if not signals:
-        await bot.send_message(chat_id=CHAT_ID, text=f"⛔ {now} — Không có tín hiệu")
-        return
-    for s in signals:
-        msg = (
-            f"⚡ <b>{s['token']}</b> — {s['side']}\n"
-            f"Loại: {s['orderType']}\n"
-            f"Entry: {s['entry']}\n"
-            f"TP: {s['tp']}\n"
-            f"SL: {s['sl']}\n"
-            f"Độ mạnh: {s['strength']}%\n\n"
-            f"<i>{s['reason']}</i>"
-        )
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.HTML)
+# Các job
+async def job_morning():
+    await send_morning_report()
 
-# ======= SCHEDULER =======
-async def scheduler():
-    while True:
-        # Ping mỗi 5 phút
-        await ping_self()
+async def job_night():
+    await send_night_summary()
 
-        # Gửi tín hiệu mỗi 30 phút (06:15 – 21:45)
-        tz = pytz.timezone(TZ_NAME)
-        now = datetime.now(tz)
-        minute = now.minute
-        hour = now.hour
-        if (hour >= 6 and hour <= 21) and (minute in (15, 45)):
-            await send_signals()
+async def job_signals():
+    await send_signal_batch()
 
-        await asyncio.sleep(60)  # check mỗi phút
-
-# ======= STARTUP =======
+# Khởi động scheduler khi server start
 @app.on_event("startup")
-async def on_startup():
-    asyncio.create_task(scheduler())
-    log.info("Scheduler started")
+async def startup_event():
+    # Ping 5 phút/lần
+    scheduler.add_job(lambda: asyncio.create_task(ping_self()), "interval", minutes=5)
+
+    # Bản tin sáng 06:00
+    scheduler.add_job(lambda: asyncio.create_task(job_morning()), "cron", hour=6, minute=0)
+
+    # Tín hiệu 06:15 → 21:45 mỗi 30 phút
+    for h in range(6, 22):
+        for m in [15, 45]:
+            scheduler.add_job(lambda: asyncio.create_task(job_signals()), "cron", hour=h, minute=m)
+
+    # Tổng kết 22:00
+    scheduler.add_job(lambda: asyncio.create_task(job_night()), "cron", hour=22, minute=0)
+
+    scheduler.start()
+    print("🚀 Scheduler started")
+
+# Endpoint check
+@app.get("/")
+async def root():
+    return {"status": "running", "time": dt.datetime.now().isoformat()}
