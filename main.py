@@ -1,3 +1,4 @@
+# autiner_bot/main.py
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler
@@ -31,9 +32,19 @@ async def webhook():
 
 def run_jobs():
     sched = BackgroundScheduler(timezone=S.TZ_NAME)
+
+    # Morning message
     sched.add_job(lambda: asyncio.run(scheduler.job_morning_message()), "cron", hour=6, minute=0)
+
+    # Báo trước tín hiệu 1 phút
+    sched.add_job(lambda: asyncio.run(scheduler.job_trade_signals_notice()), "cron", hour="6-21", minute="14,44")
+
+    # Tín hiệu giao dịch (mỗi 30 phút từ 06:15 đến 21:45)
     sched.add_job(lambda: asyncio.run(scheduler.job_trade_signals()), "cron", hour="6-21", minute="15,45")
+
+    # Tổng kết
     sched.add_job(lambda: asyncio.run(scheduler.job_summary()), "cron", hour=22, minute=0)
+
     sched.start()
 
 if __name__ == "__main__":
