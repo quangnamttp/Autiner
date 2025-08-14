@@ -1,4 +1,3 @@
-# autiner_bot/menu.py
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from autiner_bot.utils import state
@@ -20,7 +19,12 @@ def get_main_menu():
     return InlineKeyboardMarkup(keyboard)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Xin chào! Đây là bot Autiner 🚀", reply_markup=get_main_menu())
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="Xin chào! Đây là bot Autiner 🚀",
+        reply_markup=get_main_menu()
+    )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -30,11 +34,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "toggle":
         new_status = state.toggle_on_off()
-        await query.edit_message_text(f"Bot đã {'BẬT' if new_status else 'TẮT'}", reply_markup=get_main_menu())
+        await query.edit_message_text(
+            f"Bot đã {'BẬT' if new_status else 'TẮT'}",
+            reply_markup=get_main_menu()
+        )
 
     elif data == "status":
         s = state.get_state()
-        await query.edit_message_text(f"Trạng thái: {'BẬT' if s['is_on'] else 'TẮT'}\nChế độ: {s['currency_mode']}", reply_markup=get_main_menu())
+        await query.edit_message_text(
+            f"Trạng thái: {'BẬT' if s['is_on'] else 'TẮT'}\nChế độ: {s['currency_mode']}",
+            reply_markup=get_main_menu()
+        )
 
     elif data == "test":
         await query.edit_message_text("✅ Bot hoạt động bình thường!", reply_markup=get_main_menu())
