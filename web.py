@@ -1,60 +1,34 @@
-# web.py
+# web.py (đặt ở root autiner/)
 import asyncio
-import datetime as dt
-import httpx
+import logging
+import os
 from fastapi import FastAPI
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from bots.telegram_bot.telegram_bot import send_signal_batch, send_morning_report, send_night_summary
-import settings
+import httpx
+from bots.telegram_bot.telegram_bot import run_bot
 
-# Tạo FastAPI app
+log = logging.getLogger(__name__)
+
 app = FastAPI()
 
-# Scheduler
-scheduler = AsyncIOScheduler(timezone="Asia/Ho_Chi_Minh")
+# Ping Render mỗi 5 phút để giữ bot sống
+PING_URL = os.getenv("PING_URL", "https://autiner.onrender.com")
 
-# Ping tới chính Render để không bị sleep
-PING_URL = "https://autiner.onrender.com"
-
-async def ping_self():
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(PING_URL)
-            print(f"[PING] {dt.datetime.now()} → {r.status_code}")
-    except Exception as e:
-        print(f"[PING ERROR] {e}")
-
-# Các job
-async def job_morning():
-    await send_morning_report()
-
-async def job_night():
-    await send_night_summary()
-
-async def job_signals():
-    await send_signal_batch()
-
-# Khởi động scheduler khi server start
 @app.on_event("startup")
 async def startup_event():
-    # Ping 5 phút/lần
-    scheduler.add_job(lambda: asyncio.create_task(ping_self()), "interval", minutes=5)
+    # Chạy bot Telegram song song với FastAPI
+    asyncio.create_task(run_bot())
+    asyncio.create_task(self_ping_loop())
 
-    # Bản tin sáng 06:00
-    scheduler.add_job(lambda: asyncio.create_task(job_morning()), "cron", hour=6, minute=0)
-
-    # Tín hiệu 06:15 → 21:45 mỗi 30 phút
-    for h in range(6, 22):
-        for m in [15, 45]:
-            scheduler.add_job(lambda: asyncio.create_task(job_signals()), "cron", hour=h, minute=m)
-
-    # Tổng kết 22:00
-    scheduler.add_job(lambda: asyncio.create_task(job_night()), "cron", hour=22, minute=0)
-
-    scheduler.start()
-    print("🚀 Scheduler started")
-
-# Endpoint check
 @app.get("/")
 async def root():
-    return {"status": "running", "time": dt.datetime.now().isoformat()}
+    return {"status": "ok", "message": "Bot is running"}
+
+async def self_ping_loop():
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                r = await client.get(PING_URL, timeout=10)
+                log.info(f"Pinged {PING_URL}, status {r.status_code}")
+            except Exception as e:
+                log.error(f"Ping failed: {e}")
+            await asyncio.sleep(300)  # 5 phút
