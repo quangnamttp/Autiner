@@ -26,7 +26,8 @@ async def job_morning_message():
         top_coins = await get_top_coins_by_volume(limit=5)
         coins_list = "\n".join(
             [
-                f"• {c['symbol']}: {format_price(float(c['lastPrice']), state['currency_mode'], vnd_rate)}"
+                f"• {c['symbol'].replace('/USDT','/VND') if state['currency_mode']=='VND' else c['symbol']}: "
+                f"{format_price(float(c['lastPrice']), state['currency_mode'], vnd_rate)}"
                 for c in top_coins
             ]
         )
@@ -59,9 +60,7 @@ async def job_trade_signals():
 
         top_coins = await get_top_coins_by_volume(limit=5)
 
-        # 3 Scalping
         scalping_signals = [generate_scalping_signal(c["symbol"]) for c in top_coins[:3]]
-        # 2 Swing
         swing_signals = [generate_swing_signal(c["symbol"]) for c in top_coins[3:5]]
 
         all_signals = scalping_signals + swing_signals
@@ -71,16 +70,21 @@ async def job_trade_signals():
             tp_price = format_price(sig['tp'], state['currency_mode'], vnd_rate)
             sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
 
+            # Màu cho side
+            side_color = "🟩" if sig['side'].upper() == "LONG" else "🟥"
+            pair_name = sig['symbol'].replace("/USDT", "/VND") if state['currency_mode'] == "VND" else sig['symbol']
+
             highlight = "⭐ " if sig["strength"] >= 70 else ""
             msgs.append(
-                f"{highlight}📈 {sig['symbol']} – {sig['side']}\n"
-                f"🔹 {sig['type']} | {sig['orderType']}\n"
+                f"{highlight}📈 {pair_name} — {side_color} {sig['side']}\n\n"
+                f"🟢 Loại lệnh: {sig['type']}\n"
+                f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
                 f"💰 Entry: {entry_price}\n"
                 f"🎯 TP: {tp_price}\n"
                 f"🛡️ SL: {sl_price}\n"
-                f"📊 Độ mạnh: {sig['strength']}%\n"
+                f"📊 Độ mạnh: {sig['strength']}% (Tiêu chuẩn)\n"
                 f"📌 Lý do: {sig['reason']}\n"
-                f"🕒 {get_vietnam_time().strftime('%H:%M:%S')}"
+                f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
             )
 
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="\n\n".join(msgs))
