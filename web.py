@@ -1,40 +1,53 @@
-# web.py (đặt ở root autiner/)
-import asyncio
+# web.py (root autiner/)
 import logging
 import os
-from fastapi import FastAPI
+import asyncio
+from fastapi import FastAPI, Request
 import httpx
-from bots.telegram_bot.telegram_bot import run_bot
 
-# Bật log toàn hệ thống
-logging.basicConfig(level=logging.INFO)
+from bots.telegram_bot.telegram_bot import application
+
 log = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# URL để ping giữ Render không ngủ
+# URL Render của bạn
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://autiner.onrender.com/webhook")
+
+# Ping Render mỗi 5 phút để giữ bot sống
 PING_URL = os.getenv("PING_URL", "https://autiner.onrender.com")
-PING_INTERVAL = 300  # 5 phút
+
 
 @app.on_event("startup")
 async def startup_event():
-    """Chạy bot Telegram và self-ping song song."""
-    loop = asyncio.get_event_loop()
-    loop.create_task(run_bot())
-    loop.create_task(self_ping_loop())
-    log.info("🚀 Bot và self-ping đã khởi chạy.")
+    # Đặt webhook khi khởi động
+    await application.bot.set_webhook(WEBHOOK_URL)
+    log.info(f"Webhook set to {WEBHOOK_URL}")
+
+    # Tự ping để giữ bot sống
+    asyncio.create_task(self_ping_loop())
+
+
+@app.post("/webhook")
+async def telegram_webhook(req: Request):
+    """Nhận update từ Telegram"""
+    data = await req.json()
+    await application.update_queue.put(data)
+    return {"ok": True}
+
 
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Bot is running"}
 
+
 async def self_ping_loop():
-    """Ping chính app mỗi 5 phút để giữ cho Render không sleep."""
-    while True:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(PING_URL)
-                log.info(f"[PING] {PING_URL} status={r.status_code}")
-        except Exception as e:
-            log.error(f"[PING ERROR] {e}")
-        await asyncio.sleep(PING_INTERVAL)
+    """Tự ping chính mình mỗi 5 phút"""
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                r = await client.get(PING_URL, timeout=10)
+                log.info(f"Pinged {PING_URL}, status {r.status_code}")
+            except Exception as e:
+                log.error(f"Ping failed: {e}")
+            await asyncio.sleep(300)  # 5 phút
