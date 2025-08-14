@@ -11,6 +11,23 @@ import traceback
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
+# ====== Tin nhắn báo trước ======
+async def job_trade_signals_notice():
+    """Báo trước 1 phút sẽ có tín hiệu"""
+    try:
+        state = get_state()
+        if not state["is_on"]:
+            return
+        await bot.send_message(
+            chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch, chuẩn bị nhé!"
+        )
+    except Exception as e:
+        print(f"[ERROR] job_trade_signals_notice: {e}")
+        print(traceback.format_exc())
+
+
+# ====== Tin nhắn buổi sáng ======
 async def job_morning_message():
     try:
         print("[JOB] Morning message running...")
@@ -26,8 +43,7 @@ async def job_morning_message():
         top_coins = await get_top_coins_by_volume(limit=5)
         coins_list = "\n".join(
             [
-                f"• {c['symbol'].replace('/USDT','/VND') if state['currency_mode']=='VND' else c['symbol']}: "
-                f"{format_price(float(c['lastPrice']), state['currency_mode'], vnd_rate)}"
+                f"• {c['symbol']}: {format_price(float(c['lastPrice']), state['currency_mode'], vnd_rate)}"
                 for c in top_coins
             ]
         )
@@ -47,6 +63,7 @@ async def job_morning_message():
         print(traceback.format_exc())
 
 
+# ====== Gửi tín hiệu ======
 async def job_trade_signals():
     try:
         print("[JOB] Trade signals running...")
@@ -62,38 +79,37 @@ async def job_trade_signals():
 
         scalping_signals = [generate_scalping_signal(c["symbol"]) for c in top_coins[:3]]
         swing_signals = [generate_swing_signal(c["symbol"]) for c in top_coins[3:5]]
-
         all_signals = scalping_signals + swing_signals
-        msgs = []
+
         for sig in all_signals:
             entry_price = format_price(sig['entry'], state['currency_mode'], vnd_rate)
             tp_price = format_price(sig['tp'], state['currency_mode'], vnd_rate)
             sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
 
-            # Màu cho side
-            side_color = "🟩" if sig['side'].upper() == "LONG" else "🟥"
-            pair_name = sig['symbol'].replace("/USDT", "/VND") if state['currency_mode'] == "VND" else sig['symbol']
+            side_icon = "🟥 SHORT" if sig["side"].upper() == "SHORT" else "🟩 LONG"
+            order_type_icon = "🟢" if sig["type"].lower() == "swing" else "🔹"
 
             highlight = "⭐ " if sig["strength"] >= 70 else ""
-            msgs.append(
-                f"{highlight}📈 {pair_name} — {side_color} {sig['side']}\n\n"
-                f"🟢 Loại lệnh: {sig['type']}\n"
+            msg = (
+                f"{highlight}📈 {sig['symbol']} — {side_icon}\n\n"
+                f"{order_type_icon} Loại lệnh: {sig['type']}\n"
                 f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
                 f"💰 Entry: {entry_price}\n"
                 f"🎯 TP: {tp_price}\n"
                 f"🛡️ SL: {sl_price}\n"
-                f"📊 Độ mạnh: {sig['strength']}% (Tiêu chuẩn)\n"
+                f"📊 Độ mạnh: {sig['strength']}%\n"
                 f"📌 Lý do: {sig['reason']}\n"
                 f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
             )
 
-        await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="\n\n".join(msgs))
+            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
 
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
 
 
+# ====== Tổng kết phiên ======
 async def job_summary():
     try:
         print("[JOB] Summary running...")
