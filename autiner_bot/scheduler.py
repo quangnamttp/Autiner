@@ -1,4 +1,3 @@
-# autiner_bot/scheduler.py
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
@@ -17,48 +16,48 @@ async def job_morning_message():
         print("[JOB] Morning message running...")
         state = get_state()
         if not state["is_on"]:
-            print("[JOB] Bot đang tắt, bỏ qua morning message.")
             return
 
         now = get_vietnam_time()
-        vnd_price = None
+        vnd_rate = None
         if state["currency_mode"] == "VND":
-            vnd_price = await get_usdt_vnd_rate()
+            vnd_rate = await get_usdt_vnd_rate()
 
         top_coins = await get_top_coins_by_volume(limit=5)
-        if not top_coins:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="⚠️ Không lấy được danh sách coin sáng nay.")
-            return
-
         coins_list = "\n".join(
-            [f"• {c['symbol']}: {format_price(float(c['lastPrice']), state['currency_mode'])}" for c in top_coins]
+            [
+                f"• {c['symbol']}: {format_price(float(c['lastPrice']), state['currency_mode'], vnd_rate)}"
+                for c in top_coins
+            ]
         )
 
         msg = (
             f"🌞 Chào buổi sáng!\n"
             f"Hôm nay: {now.strftime('%A %d-%m-%Y')}\n\n"
-            f"💵 1 USD = {format_price(vnd_price, 'VND') if vnd_price else 'N/A'}\n\n"
+            f"💵 1 USD = {format_price(vnd_rate, 'VND', vnd_rate) if vnd_rate else 'N/A'}\n\n"
             f"📈 Top 5 coin nổi bật:\n{coins_list}\n\n"
-            f"📢 15 phút nữa sẽ có tín hiệu, bạn chuẩn bị nhé!"
+            f"📢 15 phút nữa sẽ có tín hiệu!"
         )
 
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+
     except Exception as e:
         print(f"[ERROR] job_morning_message: {e}")
         print(traceback.format_exc())
+
 
 async def job_trade_signals():
     try:
         print("[JOB] Trade signals running...")
         state = get_state()
         if not state["is_on"]:
-            print("[JOB] Bot đang tắt, bỏ qua tín hiệu.")
             return
 
+        vnd_rate = None
+        if state["currency_mode"] == "VND":
+            vnd_rate = await get_usdt_vnd_rate()
+
         top_coins = await get_top_coins_by_volume(limit=5)
-        if not top_coins:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="⚠️ Không lấy được coin để tạo tín hiệu.")
-            return
 
         # 3 Scalping
         scalping_signals = [generate_scalping_signal(c["symbol"]) for c in top_coins[:3]]
@@ -67,15 +66,12 @@ async def job_trade_signals():
 
         all_signals = scalping_signals + swing_signals
         msgs = []
-
         for sig in all_signals:
+            entry_price = format_price(sig['entry'], state['currency_mode'], vnd_rate)
+            tp_price = format_price(sig['tp'], state['currency_mode'], vnd_rate)
+            sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
+
             highlight = "⭐ " if sig["strength"] >= 70 else ""
-
-            # Format giá
-            entry_price = format_price(sig['entry'], state['currency_mode'])
-            tp_price = format_price(sig['tp'], state['currency_mode'])
-            sl_price = format_price(sig['sl'], state['currency_mode'])
-
             msgs.append(
                 f"{highlight}📈 {sig['symbol']} – {sig['side']}\n"
                 f"🔹 {sig['type']} | {sig['orderType']}\n"
@@ -88,16 +84,17 @@ async def job_trade_signals():
             )
 
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="\n\n".join(msgs))
+
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
+
 
 async def job_summary():
     try:
         print("[JOB] Summary running...")
         state = get_state()
         if not state["is_on"]:
-            print("[JOB] Bot đang tắt, bỏ qua tổng kết.")
             return
 
         msg = (
@@ -108,6 +105,7 @@ async def job_summary():
         )
 
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+
     except Exception as e:
         print(f"[ERROR] job_summary: {e}")
         print(traceback.format_exc())
