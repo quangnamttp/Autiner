@@ -7,21 +7,25 @@ import httpx
 from settings import settings
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from decimal import Decimal, ROUND_DOWN
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 STATE = {
     "AUTO_ON": True,
-    "CURRENCY": "VND"
+    "CURRENCY": "VND"  # USD hoặc VND
 }
 
-# ==== Lấy giờ VN ====
+# ==== Giờ VN ====
 def vn_now():
     return datetime.now(pytz.timezone(settings.TZ_NAME))
 
-# ==== Format giá MEXC VNDC ====
-def format_price_mexc_vnd(price_usd: float, usd_vnd: float) -> str:
+# ==== Công thức MEXC VND ====
+def format_price(price_usd: float, usd_vnd: float, currency: str) -> str:
+    if currency == "USD":
+        return f"{Decimal(price_usd).quantize(Decimal('0.0001'), rounding=ROUND_DOWN)}$"
+
     price_vnd = price_usd * usd_vnd
     if price_vnd < 0.001:
         denom = 1_000_000
@@ -29,9 +33,18 @@ def format_price_mexc_vnd(price_usd: float, usd_vnd: float) -> str:
         denom = 1_000
     else:
         denom = 1
+
     display_price = price_vnd * denom
-    # Giữ nguyên số lẻ như MEXC, không làm tròn sai
-    return f"{display_price}₫"
+    if denom == 1:
+        if display_price >= 100_000:
+            fmt = Decimal(display_price).quantize(Decimal("1"), rounding=ROUND_DOWN)
+        elif display_price >= 1_000:
+            fmt = Decimal(display_price).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        else:
+            fmt = Decimal(display_price).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+    else:
+        fmt = display_price
+    return f"{fmt}₫"
 
 # ==== Lấy tỷ giá ====
 async def get_usd_vnd():
@@ -45,7 +58,7 @@ def build_reply_keyboard():
     return ReplyKeyboardMarkup(
         [
             ["🔍 Trạng thái", "🟢 Auto ON" if STATE["AUTO_ON"] else "🔴 Auto OFF"],
-            ["🧪 Test", "💵 MEXC USD", "💵 MEXC VND"]
+            [f"💵 {STATE['CURRENCY']}", "🧪 Test"]
         ],
         resize_keyboard=True
     )
@@ -54,18 +67,17 @@ def build_reply_keyboard():
 async def generate_signals():
     usd_vnd = await get_usd_vnd()
     signals = []
-    for i in range(5):
+    for i in range(5):  # Lấy 5 tín hiệu tốt nhất
         price_usd = 0.00021 * (i + 1)
-        price_vnd_fmt = format_price_mexc_vnd(price_usd, usd_vnd)
+        entry_price = format_price(price_usd, usd_vnd, STATE["CURRENCY"])
         signals.append({
             "token": f"COIN{i+1}USDT",
             "side": "🟥 SHORT" if i % 2 else "🟩 LONG",
             "order_type": "Scalping",
             "entry_type": "Market",
-            "entry_usd": price_usd,
-            "entry_vnd": price_vnd_fmt,
-            "tp": "...",
-            "sl": "...",
+            "entry": entry_price,
+            "tp": format_price(price_usd * 1.01, usd_vnd, STATE["CURRENCY"]),
+            "sl": format_price(price_usd * 0.99, usd_vnd, STATE["CURRENCY"]),
             "strength": "60% (Tiêu chuẩn)",
             "reason": f"Funding=0.01%, Vol5m=1.5x, RSI=65, EMA9=..., EMA21=...",
             "time": vn_now().strftime("%H:%M %d/%m/%Y")
@@ -81,7 +93,7 @@ async def send_signal_batch(context: ContextTypes.DEFAULT_TYPE, chat_id=None):
             f"📈 {s['token']} — {s['side']}\n\n"
             f"🟢 Loại lệnh: {s['order_type']}\n"
             f"🔹 Kiểu vào lệnh: {s['entry_type']}\n"
-            f"💰 Entry: {s['entry_usd']} USD | {s['entry_vnd']}\n"
+            f"💰 Entry: {s['entry']}\n"
             f"🎯 TP: {s['tp']}\n"
             f"🛡️ SL: {s['sl']}\n"
             f"📊 Độ mạnh: {s['strength']}\n"
@@ -126,16 +138,18 @@ async def handle_reply_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
             text=f"Auto: {'ON' if STATE['AUTO_ON'] else 'OFF'}",
             reply_markup=build_reply_keyboard()
         )
+    elif text.startswith("💵"):
+        STATE["CURRENCY"] = "USD" if STATE["CURRENCY"] == "VND" else "VND"
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Chuyển sang {STATE['CURRENCY']}",
+            reply_markup=build_reply_keyboard()
+        )
     elif text.startswith("🧪 Test"):
         await context.bot.send_message(chat_id=chat_id, text="🔄 Đang test toàn bộ bot...")
         await send_signal_batch(context, chat_id)
         await send_morning_report(context)
         await send_night_summary(context)
-    elif text.startswith("💵 MEXC USD"):
-        await context.bot.send_message(chat_id=chat_id, text="1 USDT = 1 USD", reply_markup=build_reply_keyboard())
-    elif text.startswith("💵 MEXC VND"):
-        usd_vnd = await get_usd_vnd()
-        await context.bot.send_message(chat_id=chat_id, text=f"1 USDT = {usd_vnd}₫", reply_markup=build_reply_keyboard())
 
 # ==== Auto Loop ====
 async def auto_loop(app: Application):
