@@ -1,4 +1,3 @@
-# autiner_bot/main.py
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler
@@ -16,17 +15,18 @@ application = Application.builder().token(S.TELEGRAM_BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", menu.start_command))
 application.add_handler(CallbackQueryHandler(menu.button_handler))
 
-import asyncio
+# Khởi tạo bot
 asyncio.get_event_loop().run_until_complete(application.initialize())
 asyncio.get_event_loop().run_until_complete(application.start())
+
 @app.route("/")
 def home():
     return "Autiner Bot Running", 200
 
 @app.route(f"/webhook/{S.TELEGRAM_BOT_TOKEN}", methods=["POST"])
-def webhook():
+async def webhook():
     update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put_nowait(update)
+    await application.process_update(update)
     return "OK", 200
 
 def run_jobs():
