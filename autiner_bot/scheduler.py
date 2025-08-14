@@ -8,7 +8,6 @@ from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
 from autiner_bot.strategies.scalping import generate_scalping_signal
 from autiner_bot.strategies.swing import generate_swing_signal
 from autiner_bot.utils.format_utils import format_price
-import asyncio
 import traceback
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
@@ -68,13 +67,21 @@ async def job_trade_signals():
 
         all_signals = scalping_signals + swing_signals
         msgs = []
+
         for sig in all_signals:
             highlight = "⭐ " if sig["strength"] >= 70 else ""
+
+            # Format giá
+            entry_price = format_price(sig['entry'], state['currency_mode'])
+            tp_price = format_price(sig['tp'], state['currency_mode'])
+            sl_price = format_price(sig['sl'], state['currency_mode'])
+
             msgs.append(
                 f"{highlight}📈 {sig['symbol']} – {sig['side']}\n"
                 f"🔹 {sig['type']} | {sig['orderType']}\n"
-                f"💰 Entry: {sig['entry']}\n"
-                f"🎯 TP: {sig['tp']} | 🛡️ SL: {sig['sl']}\n"
+                f"💰 Entry: {entry_price}\n"
+                f"🎯 TP: {tp_price}\n"
+                f"🛡️ SL: {sl_price}\n"
                 f"📊 Độ mạnh: {sig['strength']}%\n"
                 f"📌 Lý do: {sig['reason']}\n"
                 f"🕒 {get_vietnam_time().strftime('%H:%M:%S')}"
