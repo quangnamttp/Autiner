@@ -1,26 +1,26 @@
-def format_price(value: float, currency: str = "VND", rate: float = None) -> str:
+def format_price(value: float, currency: str = "VND", vnd_rate: float = None) -> str:
     """
-    Định dạng giá:
-    - Nếu VND: nhân với rate, bỏ số 0 trước dấu thập phân, không làm tròn, thêm dấu phẩy
-    - Nếu USD: giữ nguyên giá trị từ sàn (2-4 số thập phân nếu nhỏ)
+    Định dạng giá theo yêu cầu:
+    - Nếu là VND: quy đổi từ USD sang VND nếu có vnd_rate
+      + Không làm tròn vô nghĩa
+      + Có dấu phẩy ngăn cách hàng nghìn
+      + Không hiển thị số 0 trước phần thập phân khi giá nhỏ
+    - Nếu là USD: giữ nguyên định dạng phù hợp
     """
-    if currency.upper() == "VND":
-        if rate is None:
-            raise ValueError("Cần truyền tỷ giá USD/VND khi hiển thị giá VND")
-
-        vnd_value = value * rate
-        if vnd_value < 1:
-            # Bỏ số 0 trước dấu chấm, giữ nguyên độ dài cần thiết
-            return f"{vnd_value:.10f}".rstrip("0").rstrip(".").replace("0.", ".") + " VND"
-        else:
-            # Thêm dấu phẩy phân tách nghìn, không làm tròn
-            return f"{vnd_value:,.10f}".rstrip("0").rstrip(".") + " VND"
-
-    else:  # USD
+    if currency == "VND":
+        if vnd_rate:
+            value = value * vnd_rate
         if value < 1:
-            return f"{value:.4f} USD"
+            return f"{value:.8f}".rstrip('0').rstrip('.') + " VND"
+        else:
+            return f"{value:,.0f} VND"
+    else:  # USD
+        if value < 0.0001:
+            return f"{value:.8f}".rstrip('0').rstrip('.') + " USD"
+        elif value < 1:
+            return f"{value:.6f}".rstrip('0').rstrip('.') + " USD"
         elif value < 100:
-            return f"{value:.2f} USD"
+            return f"{value:.4f}".rstrip('0').rstrip('.') + " USD"
         else:
             return f"{value:,.2f} USD"
 
