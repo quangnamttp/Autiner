@@ -1,43 +1,34 @@
-# web.py (root autiner/)
 import asyncio
 import logging
-import os
-from fastapi import FastAPI, Request
-import httpx
-
-from bots.telegram_bot.telegram_bot import run_bot, handle_webhook
+from fastapi import FastAPI
+from bots.telegram_bot import router, setup_bot, send_morning_report, send_night_summary
 from settings import settings
 
-logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
-
 app = FastAPI()
-
-PING_URL = os.getenv("PING_URL", "https://autiner.onrender.com")
+app.include_router(router)
 
 @app.on_event("startup")
 async def startup_event():
-    # Chạy bot Telegram song song (webhook mode)
-    asyncio.create_task(run_bot(webhook_mode=True))
-    # Chạy ping để Render không sleep
-    asyncio.create_task(self_ping_loop())
+    bot_app = setup_bot(app)
+    asyncio.create_task(ping_loop())
+    asyncio.create_task(schedule_daily(bot_app))
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "Bot is running"}
+async def ping_loop():
+    import httpx
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get("https://autiner.onrender.com")
+        except:
+            pass
+        await asyncio.sleep(300)
 
-@app.post("/webhook")
-async def webhook_handler(request: Request):
-    data = await request.json()
-    await handle_webhook(data)
-    return {"status": "ok"}
-
-async def self_ping_loop():
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                r = await client.get(PING_URL, timeout=10)
-                log.info(f"Pinged {PING_URL}, status {r.status_code}")
-            except Exception as e:
-                log.error(f"Ping failed: {e}")
-            await asyncio.sleep(300)  # 5 phút
+async def schedule_daily(bot_app):
+    while True:
+        now = bot_app.application_context.now_vn()
+        if now.strftime("%H:%M") == "06:00":
+            await send_morning_report(bot_app)
+        elif now.strftime("%H:%M") == "22:00":
+            await send_night_summary(bot_app)
+        await asyncio.sleep(60)
