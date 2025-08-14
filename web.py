@@ -1,48 +1,38 @@
 # web.py (root autiner/)
+import asyncio
 import logging
 import os
-import asyncio
 from fastapi import FastAPI, Request
 import httpx
 
-from bots.telegram_bot.telegram_bot import application
+from bots.telegram_bot.telegram_bot import run_bot, handle_webhook
+from settings import settings
 
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# URL Render của bạn
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://autiner.onrender.com/webhook")
-
-# Ping Render mỗi 5 phút để giữ bot sống
 PING_URL = os.getenv("PING_URL", "https://autiner.onrender.com")
-
 
 @app.on_event("startup")
 async def startup_event():
-    # Đặt webhook khi khởi động
-    await application.bot.set_webhook(WEBHOOK_URL)
-    log.info(f"Webhook set to {WEBHOOK_URL}")
-
-    # Tự ping để giữ bot sống
+    # Chạy bot Telegram song song (webhook mode)
+    asyncio.create_task(run_bot(webhook_mode=True))
+    # Chạy ping để Render không sleep
     asyncio.create_task(self_ping_loop())
-
-
-@app.post("/webhook")
-async def telegram_webhook(req: Request):
-    """Nhận update từ Telegram"""
-    data = await req.json()
-    await application.update_queue.put(data)
-    return {"ok": True}
-
 
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Bot is running"}
 
+@app.post("/webhook")
+async def webhook_handler(request: Request):
+    data = await request.json()
+    await handle_webhook(data)
+    return {"status": "ok"}
 
 async def self_ping_loop():
-    """Tự ping chính mình mỗi 5 phút"""
     async with httpx.AsyncClient() as client:
         while True:
             try:
