@@ -14,19 +14,25 @@ async def get_all_tickers():
 async def get_top_moving_coins(limit=5):
     """
     Lấy coin futures có biến động mạnh nhất hiện tại.
+    Đảm bảo lastPrice luôn là float và change_pct được tính đúng.
     """
     tickers = await get_all_tickers()
     futures = [t for t in tickers if t.get("symbol", "").endswith("_USDT")]
 
     for f in futures:
         try:
-            last_price = float(f["lastPrice"])
-            change_pct = float(f.get("riseFallRate", 0)) * 100 if abs(float(f.get("riseFallRate", 0))) < 10 else float(f.get("riseFallRate", 0))
-            f["change_pct"] = change_pct
-            f["lastPrice"] = last_price
+            f["lastPrice"] = float(f.get("lastPrice", 0))
         except:
-            f["change_pct"] = 0
-            f["lastPrice"] = 0
+            f["lastPrice"] = 0.0
+
+        try:
+            rf = float(f.get("riseFallRate", 0))
+            if abs(rf) < 10:  # Trường hợp API trả về dạng 0.x
+                f["change_pct"] = rf * 100
+            else:
+                f["change_pct"] = rf
+        except:
+            f["change_pct"] = 0.0
 
     futures.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
     return futures[:limit]
