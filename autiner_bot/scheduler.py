@@ -9,9 +9,8 @@ import traceback
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
-# ----- Hàm tạo tín hiệu giao dịch -----
 def create_trade_signal(symbol, last_price, change_pct):
-    """Tạo tín hiệu LONG/SHORT + Market/Limit."""
+    """Tạo tín hiệu giao dịch."""
     direction = "LONG" if change_pct > 0 else "SHORT"
     order_type = "MARKET" if abs(change_pct) > 2 else "LIMIT"
 
@@ -24,16 +23,14 @@ def create_trade_signal(symbol, last_price, change_pct):
     return {
         "symbol": symbol,
         "side": direction,
-        "type": "Futures",
         "orderType": order_type,
         "entry": last_price,
         "tp": tp_price,
         "sl": sl_price,
-        "strength": min(int(abs(change_pct) * 10), 100),  # Giả lập % độ mạnh
+        "strength": min(int(abs(change_pct) * 10), 100),
         "reason": f"Biến động {change_pct:.2f}% trong 15 phút"
     }
 
-# ----- Báo trước -----
 async def job_trade_signals_notice():
     try:
         state = get_state()
@@ -41,13 +38,12 @@ async def job_trade_signals_notice():
             return
         await bot.send_message(
             chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch từ bộ lọc biến động!"
+            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch!"
         )
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
         print(traceback.format_exc())
 
-# ----- Gửi tín hiệu -----
 async def job_trade_signals():
     try:
         state = get_state()
@@ -66,15 +62,12 @@ async def job_trade_signals():
             tp_price = format_price(sig['tp'], state['currency_mode'], vnd_rate)
             sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
 
-            # Hiển thị /VND hoặc /USD
             symbol_display = sig['symbol'].replace("_USDT", f"/{state['currency_mode']}")
-
-            side_icon = "🟥 SHORT" if sig["side"] == "SHORT" else "🟩 LONG"
+            side_icon = "🟩 LONG" if sig["side"] == "LONG" else "🟥 SHORT"
             highlight = "⭐ " if sig["strength"] >= 70 else ""
 
             msg = (
                 f"{highlight}📈 {symbol_display} — {side_icon}\n\n"
-                f"🟢 Loại lệnh: {sig['type']}\n"
                 f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
                 f"💰 Entry: {entry_price}\n"
                 f"🎯 TP: {tp_price}\n"
