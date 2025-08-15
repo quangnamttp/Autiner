@@ -22,16 +22,6 @@ def _trim_trailing_zeros(s: str) -> str:
     return s
 
 def format_price(value: float, currency: str = "USD", vnd_rate: float | None = None) -> str:
-    """
-    USD:
-      - Giữ nguyên giá trị sàn, chỉ thêm dấu chấm tách nghìn khi >= 1
-      - Không làm tròn vô nghĩa
-    VND:
-      - Luôn nhân vnd_rate; nếu không có vnd_rate => 'N/A VND' (tránh in sai)
-      - >= 1000: phẩy tách nghìn, chấm là thập phân
-      - 1 <= x < 1000: giữ số, chấm là thập phân (không ép định dạng)
-      - < 1: bỏ '0.' và 0 đầu (vd 0.000585 -> 585 VND)
-    """
     try:
         if currency == "VND":
             if not vnd_rate or vnd_rate <= 0:
@@ -39,30 +29,25 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             value = value * vnd_rate
 
             if value >= 1000:
-                s = f"{value:,.12f}"             # nghìn = ',', thập phân='.'
+                s = f"{value:,.2f}"
                 s = _trim_trailing_zeros(s)
-                return s + " VND"
+                return s.replace(",", ".") + " VND"
             elif value >= 1:
-                s = f"{value:.12f}"
+                s = f"{value:.4f}"
                 s = _trim_trailing_zeros(s)
                 return s + " VND"
             else:
-                raw = f"{value:.12f}".rstrip('0').rstrip('.')
-                # xóa '0.' và các số 0 đầu
+                raw = f"{value:.8f}"
                 raw_no_zero = raw.replace("0.", "").lstrip("0")
                 return (raw_no_zero or "0") + " VND"
 
-        # USD
         if value >= 1:
-            # :,.12f => nghìn=',' thập phân='.'; đổi nghìn thành '.' theo yêu cầu “thêm chấm cho dễ nhìn”
-            s = f"{value:,.12f}"
+            s = f"{value:,.8f}"
             s = _trim_trailing_zeros(s)
-            s = s.replace(",", ".")  # nghìn dùng chấm
-            return s
+            return s.replace(",", ".")
         else:
-            s = f"{value:.12f}"
-            s = _trim_trailing_zeros(s)
-            return s
+            s = f"{value:.8f}"
+            return _trim_trailing_zeros(s)
     except Exception:
         return f"{value} {currency}"
 
@@ -79,7 +64,6 @@ def create_trade_signal(symbol: str, last_price: float, change_pct: float):
     tp_price = last_price * (1 + tp_pct / 100.0)
     sl_price = last_price * (1 + sl_pct / 100.0)
 
-    # Strength: tỉ lệ theo % biến động, tránh 0%
     strength = max(1, min(int(abs(change_pct) * 10), 100))
 
     return {
@@ -110,7 +94,7 @@ async def job_trade_signals_notice():
         print(traceback.format_exc())
 
 # =============================
-# Gửi tín hiệu 30 phút/lần
+# Gửi tín hiệu
 # =============================
 async def job_trade_signals():
     try:
@@ -118,16 +102,15 @@ async def job_trade_signals():
         if not state["is_on"]:
             return
 
-        # Lấy song song: ticker + tỷ giá (nếu cần)
         if state["currency_mode"] == "VND":
             moving_task = asyncio.create_task(get_top_moving_coins(limit=5))
-            rate_task   = asyncio.create_task(get_usdt_vnd_rate())
+            rate_task = asyncio.create_task(get_usdt_vnd_rate())
             moving_coins, vnd_rate = await asyncio.gather(moving_task, rate_task)
 
             if not vnd_rate or vnd_rate <= 0:
                 await bot.send_message(
                     chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                    text="⚠️ Không lấy được tỷ giá USDT/VND ở vòng này nên tạm hoãn gửi tín hiệu VND."
+                    text="⚠️ Không lấy được tỷ giá USDT/VND nên tạm hoãn tín hiệu."
                 )
                 return
             use_currency = "VND"
@@ -137,8 +120,6 @@ async def job_trade_signals():
             use_currency = "USD"
 
         for c in moving_coins:
-            # Tính % biến động tin cậy: ưu tiên change_pct; nếu ~0 thì dùng riseFallRate
-            change_pct = 0.0
             try:
                 change_pct = float(c.get("change_pct", 0.0))
             except:
@@ -146,7 +127,6 @@ async def job_trade_signals():
             if abs(change_pct) < 1e-9:
                 try:
                     rf = float(c.get("riseFallRate", 0.0))
-                    # Heuristic: nếu |rf| < 1 => coi là 0.x (tỷ lệ), chuyển sang %
                     change_pct = rf * 100.0 if abs(rf) < 1.0 else rf
                 except:
                     pass
@@ -155,8 +135,8 @@ async def job_trade_signals():
             sig = create_trade_signal(c["symbol"], last_price, change_pct)
 
             entry_price = format_price(sig['entry'], use_currency, vnd_rate)
-            tp_price    = format_price(sig['tp'],    use_currency, vnd_rate)
-            sl_price    = format_price(sig['sl'],    use_currency, vnd_rate)
+            tp_price = format_price(sig['tp'], use_currency, vnd_rate)
+            sl_price = format_price(sig['sl'], use_currency, vnd_rate)
 
             symbol_display = sig['symbol'].replace("_USDT", f"/{use_currency}")
             side_icon = "🟩 LONG" if sig["side"] == "LONG" else "🟥 SHORT"
