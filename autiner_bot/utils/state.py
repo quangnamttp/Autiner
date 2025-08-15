@@ -1,23 +1,34 @@
-import json
+# autiner_bot/utils/state.py
 import os
+import json
 
 STATE_FILE = "bot_state.json"
 
-def get_state():
-    """Đọc trạng thái bot từ file."""
-    if not os.path.exists(STATE_FILE):
-        return {"is_on": True}
-    with open(STATE_FILE, "r") as f:
-        return json.load(f)
+# ==== Load trạng thái ====
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except:
+            pass
+    return {"is_on": True}
 
+# ==== Lưu trạng thái ====
 def save_state(state):
-    """Lưu trạng thái bot vào file."""
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-def toggle_state():
-    """Bật / tắt bot."""
-    state = get_state()
-    state["is_on"] = not state.get("is_on", True)
+# ==== Lấy trạng thái ====
+def get_state():
+    return load_state()
+
+# ==== Set trạng thái (tương thích menu.py) ====
+def set_state(new_state: dict):
+    save_state(new_state)
+
+# ==== Bật/Tắt ====
+def set_on_off(status: bool):
+    state = load_state()
+    state["is_on"] = status
     save_state(state)
-    return state
