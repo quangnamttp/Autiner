@@ -13,25 +13,24 @@ from datetime import time
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
 # =============================
-# Hàm format_price tích hợp
+# Hàm format_price mới
 # =============================
 def format_price(value: float, currency: str = "VND", vnd_rate: float = None) -> str:
     """
-    Định dạng giá hiển thị theo USD hoặc VND.
+    Định dạng giá hiển thị theo USD hoặc VND đúng quy tắc:
+    - USD: giữ nguyên giá từ MEXC, thêm dấu . tách nghìn, không làm tròn
+    - VND: quy đổi, không làm tròn, bỏ số 0 & dấu phẩy vô nghĩa phía trước
     """
     try:
         if currency == "VND":
-            # Nếu tỷ giá không có, dùng mặc định 25.000
             if not vnd_rate or vnd_rate <= 0:
                 vnd_rate = 25_000
-
             value = value * vnd_rate
 
-            if value >= 1:
-                if value < 1000:
-                    return f"{value:,.4f}".replace(",", "X").replace(".", ",").replace("X", ".") + " VND"
-                else:
-                    return f"{value:,.0f}".replace(",", ".") + " VND"
+            if value >= 1000:
+                return f"{value:,.0f}".replace(",", ".") + " VND"
+            elif value >= 1:
+                return str(value) + " VND"
             else:
                 raw = f"{value:.12f}".rstrip('0').rstrip('.')
                 raw_no_zero = raw.replace("0.", "").lstrip("0")
@@ -39,10 +38,9 @@ def format_price(value: float, currency: str = "VND", vnd_rate: float = None) ->
 
         else:  # USD
             if value >= 1:
-                return f"{value:,.8f}".rstrip('0').rstrip('.')
+                return f"{value:,.8f}".rstrip('0').rstrip('.').replace(",", ".")
             else:
                 return f"{value:.8f}".rstrip('0').rstrip('.')
-
     except Exception:
         return f"{value} {currency}"
 
