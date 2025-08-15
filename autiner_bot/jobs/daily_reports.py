@@ -2,91 +2,74 @@ from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
-from autiner_bot.data_sources.mexc import get_top_moving_coins
 from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
-from autiner_bot.utils.format_utils import format_price
-from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
-import traceback
-import pytz
-from datetime import time
+from autiner_bot.data_sources.mexc import get_top_moving_coins, get_market_sentiment, get_market_funding_volume
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
-def create_trade_signal(symbol, last_price, change_pct):
-    """Tạo tín hiệu giao dịch."""
-    direction = "LONG" if change_pct > 0 else "SHORT"
-    order_type = "MARKET" if abs(change_pct) > 2 else "LIMIT"
-
-    tp_pct = 0.5 if direction == "LONG" else -0.5
-    sl_pct = -0.3 if direction == "LONG" else 0.3
-
-    tp_price = last_price * (1 + tp_pct / 100)
-    sl_price = last_price * (1 + sl_pct / 100)
-
-    return {
-        "symbol": symbol,
-        "side": direction,
-        "orderType": order_type,
-        "entry": last_price,
-        "tp": tp_price,
-        "sl": sl_price,
-        "strength": min(int(abs(change_pct) * 10), 100),
-        "reason": f"Biến động {change_pct:.2f}% trong 15 phút"
-    }
-
-async def job_trade_signals_notice():
+async def job_morning_message():
+    """Gửi thông báo buổi sáng lúc 6h."""
     try:
         state = get_state()
         if not state["is_on"]:
             return
-        await bot.send_message(
-            chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch!"
+
+        now = get_vietnam_time()
+        weekday = now.strftime("%A")
+        date_str = now.strftime("%d/%m/%Y")
+
+        # Giá USD -> VND
+        vnd_rate = await get_usdt_vnd_rate()
+        usd_to_vnd = f"{vnd_rate:,.0f}".replace(",", ".")
+
+        # Xu hướng thị trường
+        sentiment = await get_market_sentiment()  # {"long": 65.2, "short": 34.8}
+
+        # Top 5 coin tăng trưởng
+        top_coins = await get_top_moving_coins(limit=5)
+
+        # Funding & Volume
+        funding_info = await get_market_funding_volume()  # {"funding": "...", "volume": "...", "trend": "..."}
+
+        msg = (
+            f"📅 Hôm nay {weekday} — {date_str}\n"
+            f"🌞 06:00 — Chào buổi sáng hôm nay thị trường có những biến động bạn theo dõi nhé\n"
+            f"“Chào buổi sáng nhé anh Trương ☀️…”\n\n"
+            f"💵 1 USD = {usd_to_vnd} VND\n"
+            f"📊 Hôm nay thị trường nghiêng về: LONG {sentiment['long']:.1f}% | SHORT {sentiment['short']:.1f}%\n\n"
+            f"🔥 5 đồng coin tăng trưởng nổi bật:\n" +
+            "\n".join([f"• {c['symbol']} {c['change_pct']:.2f}%" for c in top_coins]) + "\n\n"
+            f"💹 Funding: {funding_info['funding']}\n"
+            f"📈 Volume: {funding_info['volume']}\n"
+            f"📌 Xu hướng: {funding_info['trend']}\n\n"
+            f"⏳ 15 phút nữa sẽ có tín hiệu, bạn cân nhắc vào lệnh nhé!"
         )
-    except Exception as e:
-        print(f"[ERROR] job_trade_signals_notice: {e}")
-        print(traceback.format_exc())
 
-async def job_trade_signals():
+        await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+
+    except Exception as e:
+        print(f"[ERROR] job_morning_message: {e}")
+
+
+async def job_evening_summary():
+    """Gửi thông báo kết thúc ngày lúc 22h."""
     try:
         state = get_state()
         if not state["is_on"]:
             return
 
-        vnd_rate = None
-        if state["currency_mode"] == "VND":
-            vnd_rate = await get_usdt_vnd_rate()
+        now = get_vietnam_time()
+        date_str = now.strftime("%d/%m/%Y")
 
-        moving_coins = await get_top_moving_coins(limit=5)
-        signals = [create_trade_signal(c["symbol"], c["lastPrice"], c["change_pct"]) for c in moving_coins]
+        msg = (
+            f"🌒 22:00 — {date_str}\n\n"
+            f"Bây giờ là lúc kết thúc giờ làm việc, bạn hãy quản lí tín hiệu tốt.\n"
+            f"Nhưng hãy chốt tất cả các lệnh trước khi ngủ để tránh biến động về đêm…\n"
+            f"Ngày mai chúng ta sẽ bắt đầu công việc mới!\n\n"
+            f"🌙 Chúc anh Trương ngủ ngon, mơ đẹp và tạm biệt! 🤗"
+        )
 
-        for sig in signals:
-            entry_price = format_price(sig['entry'], state['currency_mode'], vnd_rate)
-            tp_price = format_price(sig['tp'], state['currency_mode'], vnd_rate)
-            sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
+        await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
 
-            symbol_display = sig['symbol'].replace("_USDT", f"/{state['currency_mode']}")
-            side_icon = "🟩 LONG" if sig["side"] == "LONG" else "🟥 SHORT"
-            highlight = "⭐ " if sig["strength"] >= 70 else ""
-
-            msg = (
-                f"{highlight}📈 {symbol_display} — {side_icon}\n\n"
-                f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
-                f"💰 Entry: {entry_price}\n"
-                f"🎯 TP: {tp_price}\n"
-                f"🛡️ SL: {sl_price}\n"
-                f"📊 Độ mạnh: {sig['strength']}%\n"
-                f"📌 Lý do: {sig['reason']}\n"
-                f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
-            )
-
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
-        print(f"[ERROR] job_trade_signals: {e}")
-        print(traceback.format_exc())
-
-# Hàm đăng ký lịch cho 6h và 22h
-def register_daily_jobs(job_queue):
-    tz = pytz.timezone("Asia/Ho_Chi_Minh")
-    job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
-    job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
+        print(f"[ERROR] job_evening_summary: {e}")
