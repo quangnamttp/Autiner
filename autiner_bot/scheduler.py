@@ -4,7 +4,6 @@ from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import get_top_moving_coins
 from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
-from autiner_bot.utils.format_utils import format_price
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 import traceback
 import pytz
@@ -12,6 +11,40 @@ from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
+# ====== Định dạng giá ======
+def format_price(value: float, currency: str = "VND", vnd_rate: float = None) -> str:
+    """
+    Định dạng giá hiển thị theo USD hoặc VND.
+    """
+    try:
+        if currency == "VND":
+            # Nếu tỷ giá không có, dùng mặc định 25.000
+            if not vnd_rate or vnd_rate <= 0:
+                vnd_rate = 25_000
+
+            value = value * vnd_rate
+
+            if value >= 1:
+                if value < 1000:
+                    return f"{value:,.4f}".replace(",", "X").replace(".", ",").replace("X", ".") + " VND"
+                else:
+                    return f"{value:,.0f}".replace(",", ".") + " VND"
+            else:
+                raw = f"{value:.12f}".rstrip('0').rstrip('.')
+                raw_no_zero = raw.replace("0.", "").lstrip("0")
+                return raw_no_zero + " VND"
+
+        else:  # USD
+            if value >= 1:
+                return f"{value:,.8f}".rstrip('0').rstrip('.')
+            else:
+                return f"{value:.8f}".rstrip('0').rstrip('.')
+
+    except Exception:
+        return f"{value} {currency}"
+
+
+# ====== Tạo tín hiệu ======
 def create_trade_signal(symbol, last_price, change_pct):
     """Tạo tín hiệu giao dịch."""
     direction = "LONG" if change_pct > 0 else "SHORT"
@@ -34,6 +67,8 @@ def create_trade_signal(symbol, last_price, change_pct):
         "reason": f"Biến động {change_pct:.2f}% trong 15 phút"
     }
 
+
+# ====== Báo trước khi gửi tín hiệu ======
 async def job_trade_signals_notice():
     try:
         state = get_state()
@@ -47,16 +82,20 @@ async def job_trade_signals_notice():
         print(f"[ERROR] job_trade_signals_notice: {e}")
         print(traceback.format_exc())
 
+
+# ====== Gửi tín hiệu ======
 async def job_trade_signals():
     try:
         state = get_state()
         if not state["is_on"]:
             return
 
+        # Lấy tỷ giá nếu chọn VND
         vnd_rate = None
         if state["currency_mode"] == "VND":
             vnd_rate = await get_usdt_vnd_rate()
 
+        # Lấy coin biến động mạnh nhất
         moving_coins = await get_top_moving_coins(limit=5)
         signals = [create_trade_signal(c["symbol"], c["lastPrice"], c["change_pct"]) for c in moving_coins]
 
@@ -67,10 +106,7 @@ async def job_trade_signals():
             sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
 
             # Hiển thị tên cặp chuẩn
-            if state['currency_mode'] == "VND":
-                symbol_display = sig['symbol'].replace("_USDT", "/VND")
-            else:
-                symbol_display = sig['symbol'].replace("_USDT", "/USD")
+            symbol_display = sig['symbol'].replace("_USDT", f"/{state['currency_mode']}")
 
             side_icon = "🟩 LONG" if sig["side"] == "LONG" else "🟥 SHORT"
             highlight = "⭐ " if sig["strength"] >= 70 else ""
@@ -91,7 +127,8 @@ async def job_trade_signals():
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
 
-# Hàm đăng ký lịch cho 6h và 22h
+
+# ====== Đăng ký job sáng & tối ======
 def register_daily_jobs(job_queue):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
     job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
