@@ -1,66 +1,64 @@
 # autiner_bot/menu.py
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import CallbackContext, CommandHandler, CallbackQueryHandler
-from autiner_bot.settings import S
-from autiner_bot.utils.state import get_state, set_state
+from telegram import ReplyKeyboardMarkup, Update
+from telegram.ext import ContextTypes
+
+from autiner_bot.utils import state
+from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 from autiner_bot.scheduler import job_trade_signals
 
-# =============================
-# Tạo menu chính
-# =============================
-def main_menu():
+
+# ==== Hàm tạo menu ====
+def get_reply_menu():
+    s = state.get_state()
+    auto_btn = "🟢 Auto ON" if not s["is_on"] else "🔴 Auto OFF"
+
     keyboard = [
-        [
-            InlineKeyboardButton("🟢 ON", callback_data="bot_on"),
-            InlineKeyboardButton("🔴 OFF", callback_data="bot_off"),
-        ],
-        [
-            InlineKeyboardButton("🧪 Test Bot", callback_data="bot_test"),
-        ]
+        ["🔍 Trạng thái", auto_btn],
+        ["🧪 Test toàn bộ"]
     ]
-    return InlineKeyboardMarkup(keyboard)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# =============================
-# Lệnh /start
-# =============================
-async def start(update: Update, context: CallbackContext):
-    if update.effective_user.id != S.TELEGRAM_ALLOWED_USER_ID:
-        return await update.message.reply_text("❌ Bạn không có quyền sử dụng bot này.")
-    await update.message.reply_text("🤖 Xin chào! Chọn thao tác:", reply_markup=main_menu())
 
-# =============================
-# Xử lý callback từ menu
-# =============================
-async def menu_handler(update: Update, context: CallbackContext):
-    query = update.callback_query
-    await query.answer()
+# ==== /start Command ====
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    s = state.get_state()
+    msg = (
+        f"📡 Dữ liệu MEXC: LIVE ✅\n"
+        f"• Auto: {'ON' if s['is_on'] else 'OFF'}"
+    )
+    await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
-    if query.from_user.id != S.TELEGRAM_ALLOWED_USER_ID:
-        return await query.edit_message_text("❌ Bạn không có quyền sử dụng bot này.")
 
-    state = get_state()
+# ==== Handler cho Reply Keyboard ====
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
 
-    if query.data == "bot_on":
-        if state["is_on"]:
-            await query.edit_message_text("⚡ Bot đã bật rồi!", reply_markup=main_menu())
+    # Bật/Tắt bot
+    if text in ["🟢 Auto ON", "🔴 Auto OFF"]:
+        if text == "🟢 Auto ON":
+            state.set_on_off(True)
+            msg = "⚙️ Auto tín hiệu: 🟢 ON"
         else:
-            set_state({"is_on": True})
-            await query.edit_message_text("🟢 Bot đã được bật!", reply_markup=main_menu())
+            state.set_on_off(False)
+            msg = "⚙️ Auto tín hiệu: 🔴 OFF"
+        await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
-    elif query.data == "bot_off":
-        if not state["is_on"]:
-            await query.edit_message_text("⚡ Bot đã tắt rồi!", reply_markup=main_menu())
-        else:
-            set_state({"is_on": False})
-            await query.edit_message_text("🔴 Bot đã được tắt!", reply_markup=main_menu())
+    # Xem trạng thái
+    elif text == "🔍 Trạng thái":
+        s = state.get_state()
+        msg = (
+            f"📡 Dữ liệu MEXC: LIVE ✅\n"
+            f"• Auto: {'ON' if s['is_on'] else 'OFF'}"
+        )
+        await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
-    elif query.data == "bot_test":
-        await query.edit_message_text("🧪 Đang gửi tín hiệu test...")
+    # Test toàn bộ (6h + tín hiệu + 22h)
+    elif text == "🧪 Test toàn bộ":
+        await update.message.reply_text("🔄 Đang chạy test toàn bộ báo cáo...", reply_markup=get_reply_menu())
+        await job_morning_message()
         await job_trade_signals()
+        await job_evening_summary()
+        await update.message.reply_text("✅ Hoàn tất test toàn bộ!")
 
-# =============================
-# Đăng ký handler
-# =============================
-def register_handlers(app):
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_handler))
+    else:
+        await update.message.reply_text("⚠️ Lệnh không hợp lệ!", reply_markup=get_reply_menu())
