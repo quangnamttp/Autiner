@@ -9,17 +9,18 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 
-# Tạo bot Application
+# Tạo bot
 application = Application.builder().token(S.TELEGRAM_BOT_TOKEN).build()
 
-# Thêm handlers
+# Handlers
 application.add_handler(CommandHandler("start", menu.start_command))
+application.add_handler(CommandHandler("menu", menu.menu_command))
 application.add_handler(CallbackQueryHandler(menu.button_handler))
 
-# Event loop chung
+# Event loop
 loop = asyncio.get_event_loop()
 
-# ---- Khởi tạo bot & webhook ----
+# ---- Khởi tạo bot và webhook ----
 async def init_bot():
     await application.initialize()
     await application.start()
@@ -49,10 +50,10 @@ def run_jobs():
     for h in range(6, 22):
         for m in [15, 45]:
             # Báo trước
-            sched.add_job(lambda: loop.create_task(scheduler.job_trade_signals_notice()),
+            sched.add_job(lambda h=h, m=m: loop.create_task(scheduler.job_trade_signals_notice()),
                           "cron", hour=h, minute=(m - 1 if m > 0 else 59))
             # Gửi tín hiệu
-            sched.add_job(lambda: loop.create_task(scheduler.job_trade_signals()),
+            sched.add_job(lambda h=h, m=m: loop.create_task(scheduler.job_trade_signals()),
                           "cron", hour=h, minute=m)
 
     # 22:00 tối
@@ -62,6 +63,6 @@ def run_jobs():
     print("[JOB] Scheduler started")
 
 if __name__ == "__main__":
-    loop.create_task(init_bot())
-    run_jobs()
+    loop.create_task(init_bot())   # Khởi tạo bot
+    run_jobs()                     # Chạy lịch
     app.run(host="0.0.0.0", port=10000)
