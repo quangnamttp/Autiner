@@ -8,14 +8,14 @@ async def fetch_json(url):
 
 async def get_usdt_vnd_rate():
     """Lấy tỷ giá USDT → VND từ MEXC."""
-    async with aiohttp.ClientSession() as session:
-        async with session.get(S.MEXC_TICKER_VNDC_URL) as resp:
-            data = await resp.json()
-            try:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(S.MEXC_TICKER_VNDC_URL) as resp:
+                data = await resp.json()
                 ticker = data.get("data", [])[0]
                 return float(ticker["last"])
-            except:
-                return None
+    except:
+        return None
 
 async def get_market_sentiment():
     """Lấy tỷ lệ Long/Short từ MEXC (BTC_USDT)."""
@@ -38,10 +38,12 @@ async def get_market_funding_volume():
         funding_data = await fetch_json(funding_url)
         funding_rate = funding_data.get("data", {}).get("fundingRate", "0%")
 
-        tickers = await fetch_json(S.MEXC_TICKER_URL)
+        tickers_url = S.MEXC_TICKER_URL
+        tickers = await fetch_json(tickers_url)
+        tickers = tickers.get("data", [])
         volume = "N/A"
         trend = "N/A"
-        for item in tickers.get("data", []):
+        for item in tickers:
             if item.get("symbol") == "BTC_USDT":
                 volume = f"{float(item.get('volume', 0)) / 1_000_000:.2f}M USDT"
                 change_pct = float(item.get("riseFallRate", 0))
