@@ -1,20 +1,23 @@
 def format_price(value: float, currency: str = "VND", vnd_rate: float = None) -> str:
     """
-    Định dạng giá theo yêu cầu:
-    - Nếu là VND: giữ số nhỏ nhất có ý nghĩa, không làm tròn, thêm dấu phẩy ngăn cách hàng nghìn
-    - Nếu là USD: giữ nguyên định dạng giống sàn
-    - Nếu currency_mode là VND thì value sẽ được nhân với vnd_rate trước khi format
+    Định dạng giá:
+    - Nếu là VND: nhân với vnd_rate, hiển thị kèm 'VND'
+    - Nếu là USD: giữ nguyên giá trị gốc từ sàn, hiển thị kèm 'USD'
+    - Không làm tròn vô nghĩa, giữ số thập phân cần thiết
     """
     try:
-        if currency == "VND" and vnd_rate:
-            value = value * vnd_rate
-            # Không làm tròn, giữ số thập phân cần thiết
+        if currency == "VND":
+            if vnd_rate:
+                value = value * vnd_rate
+            # VND: hiển thị dấu phẩy ngăn cách hàng nghìn
             if value < 1:
                 return f"{value:,.8f} VND".rstrip('0').rstrip('.')
+            elif value < 1000:
+                return f"{value:,.2f} VND"
             else:
-                return f"{value:,.8f} VND".rstrip('0').rstrip('.')
+                return f"{value:,.0f} VND"
         else:
-            # USD hiển thị y như sàn, không tự động làm tròn vô nghĩa
+            # USD: giữ định dạng giống sàn
             if value < 1:
                 return f"{value:.8f} USD".rstrip('0').rstrip('.')
             elif value < 100:
