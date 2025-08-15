@@ -1,76 +1,42 @@
-from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import CallbackContext
+from autiner_bot.utils.state import toggle_state, get_state
+from autiner_bot.settings import S
+from autiner_bot.scheduler import job_trade_signals_notice, job_trade_signals
+import asyncio
 
-from autiner_bot.utils import state
-from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
-from autiner_bot.scheduler import job_trade_signals
-
-
-# ==== Hàm tạo menu động theo trạng thái ====
-def get_reply_menu():
-    s = state.get_state()
-
-    auto_btn = "🟢 Auto ON" if not s["is_on"] else "🔴 Auto OFF"
-    currency_btn = "💴 MEXC VND" if s["currency_mode"] == "VND" else "💵 MEXC USD"
-
+# =============================
+# Menu chính
+# =============================
+def main_menu():
+    state = get_state()
+    status = "🟢 ON" if state["is_on"] else "🔴 OFF"
     keyboard = [
-        ["🔍 Trạng thái", auto_btn],
-        ["🧪 Test toàn bộ", currency_btn]
+        [InlineKeyboardButton(status, callback_data="toggle_on_off")],
+        [InlineKeyboardButton("🛠 Test bot", callback_data="test_bot")]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return InlineKeyboardMarkup(keyboard)
 
+# =============================
+# /start
+# =============================
+async def start(update: Update, context: CallbackContext):
+    if update.effective_user.id != S.TELEGRAM_ALLOWED_USER_ID:
+        await update.message.reply_text("⛔ Bạn không có quyền sử dụng bot này.")
+        return
+    await update.message.reply_text("📌 Chào mừng! Đây là bot tín hiệu Autiner.", reply_markup=main_menu())
 
-# ==== /start Command ====
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    s = state.get_state()
-    msg = (
-        f"📡 Dữ liệu MEXC: LIVE ✅\n"
-        f"• Đơn vị: {s['currency_mode']}\n"
-        f"• Auto: {'ON' if s['is_on'] else 'OFF'}"
-    )
-    await update.message.reply_text(msg, reply_markup=get_reply_menu())
+# =============================
+# Xử lý callback
+# =============================
+async def button_handler(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
 
+    if query.data == "toggle_on_off":
+        toggle_state("is_on")
+        await query.edit_message_text("⚙ Đã thay đổi trạng thái bot.", reply_markup=main_menu())
 
-# ==== Handler cho Reply Keyboard ====
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-
-    # Bật/Tắt bot
-    if text in ["🟢 Auto ON", "🔴 Auto OFF"]:
-        if text == "🟢 Auto ON":
-            state.set_on_off(True)
-            msg = "⚙️ Auto tín hiệu: 🟢 ON"
-        else:
-            state.set_on_off(False)
-            msg = "⚙️ Auto tín hiệu: 🔴 OFF"
-        await update.message.reply_text(msg, reply_markup=get_reply_menu())
-
-    # Chuyển đổi đơn vị
-    elif text in ["💴 MEXC VND", "💵 MEXC USD"]:
-        new_mode = "USD" if state.get_state()["currency_mode"] == "VND" else "VND"
-        state.set_currency_mode(new_mode)
-        await update.message.reply_text(
-            f"💱 Đã chuyển đơn vị sang: {new_mode}",
-            reply_markup=get_reply_menu()
-        )
-
-    # Xem trạng thái
-    elif text == "🔍 Trạng thái":
-        s = state.get_state()
-        msg = (
-            f"📡 Dữ liệu MEXC: LIVE ✅\n"
-            f"• Đơn vị: {s['currency_mode']}\n"
-            f"• Auto: {'ON' if s['is_on'] else 'OFF'}"
-        )
-        await update.message.reply_text(msg, reply_markup=get_reply_menu())
-
-    # Test toàn bộ (6h + tín hiệu + 22h)
-    elif text == "🧪 Test toàn bộ":
-        await update.message.reply_text("🔄 Đang chạy test toàn bộ báo cáo...", reply_markup=get_reply_menu())
-        await job_morning_message()
-        await job_trade_signals()
-        await job_evening_summary()
-        await update.message.reply_text("✅ Hoàn tất test toàn bộ!")
-
-    else:
-        await update.message.reply_text("⚠️ Lệnh không hợp lệ!", reply_markup=get_reply_menu())
+    elif query.data == "test_bot":
+        await query.edit_message_text("⏳ Đang gửi tín hiệu test...")
+        await asyncio.gather(job_trade_signals_notice(), job_trade_signals())
