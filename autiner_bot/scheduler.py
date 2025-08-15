@@ -1,9 +1,8 @@
-# autiner_bot/scheduler.py
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
-from autiner_bot.data_sources.mexc import get_top_coins_by_volume
+from autiner_bot.data_sources.mexc import get_top_moving_coins
 from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
 from autiner_bot.strategies.scalping import generate_scalping_signal
 from autiner_bot.strategies.swing import generate_swing_signal
@@ -38,17 +37,21 @@ async def job_morning_message():
         if state["currency_mode"] == "VND":
             vnd_rate = await get_usdt_vnd_rate()
 
-        top_coins = await get_top_coins_by_volume(limit=5)
+        top_coins = await get_top_moving_coins(limit=5)
         coins_list = "\n".join(
             [f"• {c['symbol']}: {format_price(float(c['lastPrice']), state['currency_mode'], vnd_rate)}"
              for c in top_coins]
         )
 
+        usd_to_vnd_text = ""
+        if state["currency_mode"] == "VND" and vnd_rate:
+            usd_to_vnd_text = f"💵 1 USD = {format_price(vnd_rate, 'VND', vnd_rate)}\n\n"
+
         msg = (
             f"🌞 Chào buổi sáng!\n"
             f"Hôm nay: {now.strftime('%A %d-%m-%Y')}\n\n"
-            f"💵 1 USD = {format_price(vnd_rate, 'VND', vnd_rate) if vnd_rate else 'N/A'}\n\n"
-            f"📈 Top 5 coin nổi bật:\n{coins_list}\n\n"
+            f"{usd_to_vnd_text}"
+            f"📈 Top 5 coin biến động mạnh:\n{coins_list}\n\n"
             f"📢 15 phút nữa sẽ có tín hiệu!"
         )
 
@@ -68,9 +71,10 @@ async def job_trade_signals():
         if state["currency_mode"] == "VND":
             vnd_rate = await get_usdt_vnd_rate()
 
-        top_coins = await get_top_coins_by_volume(limit=5)
-        scalping_signals = [generate_scalping_signal(c["symbol"]) for c in top_coins[:3]]
-        swing_signals = [generate_swing_signal(c["symbol"]) for c in top_coins[3:5]]
+        moving_coins = await get_top_moving_coins(limit=8, min_volume=1_000_000, min_change=1.0)
+
+        scalping_signals = [generate_scalping_signal(c["symbol"]) for c in moving_coins[:5]]
+        swing_signals = [generate_swing_signal(c["symbol"]) for c in moving_coins[5:8]]
         all_signals = scalping_signals + swing_signals
 
         for sig in all_signals:
