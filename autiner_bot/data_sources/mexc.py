@@ -11,34 +11,53 @@ async def get_all_tickers():
     data = await fetch_json(S.MEXC_TICKER_URL)
     return data.get("data", [])
 
+async def get_kline_change(symbol, minutes=15):
+    """Tính biến động trong X phút gần nhất."""
+    url = S.MEXC_KLINES_URL.format(sym=symbol)
+    data = await fetch_json(url)
+
+    if not data or "data" not in data:
+        return 0
+
+    klines = data["data"][-minutes:]  # Lấy số nến tương ứng phút gần nhất
+    if len(klines) < minutes:
+        return 0
+
+    open_price = float(klines[0][1])   # Giá mở cửa của nến đầu
+    close_price = float(klines[-1][4]) # Giá đóng cửa của nến cuối
+
+    if open_price == 0:
+        return 0
+
+    return ((close_price - open_price) / open_price) * 100
+
 async def get_top_moving_coins(limit=5):
     """
-    Lấy coin futures có biến động mạnh nhất hiện tại (không giới hạn turnover).
-    - limit: số lượng coin trả về.
+    Lấy coin futures có biến động mạnh nhất trong 15 phút gần nhất.
     """
     tickers = await get_all_tickers()
     futures = [t for t in tickers if t.get("symbol", "").endswith("_USDT")]
 
+    results = []
     for f in futures:
         try:
+            symbol = f["symbol"]
             last_price = float(f["lastPrice"])
-            high = float(f.get("highPrice", last_price))
-            low = float(f.get("lowPrice", last_price))
-            if low > 0:
-                change_pct = ((high - low) / low) * 100
-            else:
-                change_pct = 0
-            f["change_pct"] = change_pct
-            f["lastPrice"] = last_price
-        except:
-            f["change_pct"] = 0
-            f["lastPrice"] = 0
+            change_pct = await get_kline_change(symbol, 15)
 
-    futures.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
-    return futures[:limit]
+            results.append({
+                "symbol": symbol,
+                "lastPrice": last_price,
+                "change_pct": change_pct
+            })
+        except:
+            pass
+
+    results.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
+    return results[:limit]
 
 # =============================
-# Thêm mới 2 hàm này
+# Giữ nguyên 2 hàm này
 # =============================
 
 async def get_market_sentiment():
