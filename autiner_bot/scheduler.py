@@ -9,6 +9,7 @@ import traceback
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
+# ----- Hàm tạo tín hiệu giao dịch -----
 def create_trade_signal(symbol, last_price, change_pct):
     """Tạo tín hiệu LONG/SHORT + Market/Limit."""
     direction = "LONG" if change_pct > 0 else "SHORT"
@@ -28,10 +29,11 @@ def create_trade_signal(symbol, last_price, change_pct):
         "entry": last_price,
         "tp": tp_price,
         "sl": sl_price,
-        "strength": min(int(abs(change_pct) * 10), 100),
+        "strength": min(int(abs(change_pct) * 10), 100),  # Giả lập % độ mạnh
         "reason": f"Biến động {change_pct:.2f}% trong 15 phút"
     }
 
+# ----- Báo trước -----
 async def job_trade_signals_notice():
     try:
         state = get_state()
@@ -56,23 +58,22 @@ async def job_trade_signals():
         if state["currency_mode"] == "VND":
             vnd_rate = await get_usdt_vnd_rate()
 
-        moving_coins = await get_top_moving_coins(limit=5, min_turnover=500000)
+        moving_coins = await get_top_moving_coins(limit=5)
         signals = [create_trade_signal(c["symbol"], c["lastPrice"], c["change_pct"]) for c in moving_coins]
 
         for sig in signals:
-            # Chuyển định dạng symbol
-            base_symbol = sig['symbol'].replace("_USDT", "")
-            display_symbol = f"{base_symbol}/VND" if state["currency_mode"] == "VND" else f"{base_symbol}/USD"
-
             entry_price = format_price(sig['entry'], state['currency_mode'], vnd_rate)
             tp_price = format_price(sig['tp'], state['currency_mode'], vnd_rate)
             sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
+
+            # Hiển thị /VND hoặc /USD
+            symbol_display = sig['symbol'].replace("_USDT", f"/{state['currency_mode']}")
 
             side_icon = "🟥 SHORT" if sig["side"] == "SHORT" else "🟩 LONG"
             highlight = "⭐ " if sig["strength"] >= 70 else ""
 
             msg = (
-                f"{highlight}📈 {display_symbol} — {side_icon}\n\n"
+                f"{highlight}📈 {symbol_display} — {side_icon}\n\n"
                 f"🟢 Loại lệnh: {sig['type']}\n"
                 f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
                 f"💰 Entry: {entry_price}\n"
