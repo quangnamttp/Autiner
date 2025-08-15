@@ -1,22 +1,17 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from autiner_bot.utils import state
 
 def get_main_menu():
     s = state.get_state()
     currency_label = "💵 MEXC USD" if s["currency_mode"] == "USD" else "💴 MEXC VND"
-    status_label = "🟢 Bot ON" if s["is_on"] else "🔴 Bot OFF"
+    status_label = "🟢 Auto ON" if s["is_on"] else "🔴 Auto OFF"
 
     keyboard = [
-        [
-            InlineKeyboardButton(status_label, callback_data="toggle_on_off"),
-            InlineKeyboardButton(currency_label, callback_data="toggle_currency"),
-        ],
-        [
-            InlineKeyboardButton("🧪 Test bot", callback_data="test"),
-        ]
+        ["📊 Trạng thái", status_label],
+        ["🧪 Test", currency_label]
     ]
-    return InlineKeyboardMarkup(keyboard)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -24,27 +19,24 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_menu()
     )
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data == "toggle_on_off":
-        new_status = state.toggle_on_off()
-        await query.edit_message_text(
-            f"✅ Bot đã {'BẬT' if new_status else 'TẮT'}",
-            reply_markup=get_main_menu()
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text == "📊 Trạng thái":
+        s = state.get_state()
+        await update.message.reply_text(
+            f"📡 Dữ liệu MEXC: LIVE ✅\n• Đơn vị: {s['currency_mode']}\n• Auto: {'ON' if s['is_on'] else 'OFF'}"
         )
-
-    elif data == "toggle_currency":
-        new_mode = state.toggle_currency_mode()
-        await query.edit_message_text(
-            f"💱 Đã chuyển sang chế độ {new_mode}",
-            reply_markup=get_main_menu()
-        )
-
-    elif data == "test":
-        await query.edit_message_text(
-            "✅ Bot hoạt động bình thường!",
-            reply_markup=get_main_menu()
-        )
+    elif text == "🟢 Auto ON":
+        state.set_on_off(True)
+        await update.message.reply_text("⚙️ Auto tín hiệu: 🟢 ON")
+    elif text == "🔴 Auto OFF":
+        state.set_on_off(False)
+        await update.message.reply_text("⚙️ Auto tín hiệu: 🔴 OFF")
+    elif text == "💵 MEXC USD":
+        state.set_currency_mode("USD")
+        await update.message.reply_text("💱 Đã chuyển sang: USD")
+    elif text == "💴 MEXC VND":
+        state.set_currency_mode("VND")
+        await update.message.reply_text("💱 Đã chuyển sang: VND")
+    elif text == "🧪 Test":
+        await update.message.reply_text("✅ Bot hoạt động bình thường!")
