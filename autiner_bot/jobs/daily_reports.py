@@ -2,8 +2,8 @@ from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
-from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
-from autiner_bot.data_sources.mexc import get_top_moving_coins, get_market_sentiment, get_market_funding_volume
+from autiner_bot.data_sources.mexc import get_top_moving_coins
+from autiner_bot.data_sources.exchange import get_usdt_vnd_rate, get_market_sentiment, get_market_funding_volume
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
@@ -33,11 +33,11 @@ async def job_morning_message():
 
         msg = (
             f"📅 Hôm nay {weekday} — {date_str}\n"
-            f"🌞 06:00 — Chào buổi sáng hôm nay thị trường có những biến động bạn theo dõi nhé\n"
+            f"🌞 06:00 — Chào buổi sáng, thị trường hôm nay có những biến động bạn theo dõi nhé\n"
             f"“Chào buổi sáng nhé anh Trương ☀️…”\n\n"
             f"💵 1 USD = {usd_to_vnd} VND\n"
-            f"📊 Hôm nay thị trường nghiêng về: LONG {sentiment['long']:.1f}% | SHORT {sentiment['short']:.1f}%\n\n"
-            f"🔥 5 đồng coin tăng trưởng nổi bật:\n" +
+            f"📊 Thị trường nghiêng về: LONG {sentiment['long']:.1f}% | SHORT {sentiment['short']:.1f}%\n\n"
+            f"🔥 5 đồng coin nổi bật:\n" +
             "\n".join([f"• {c['symbol']} {c['change_pct']:.2f}%" for c in top_coins]) + "\n\n"
             f"💹 Funding: {funding_info['funding']}\n"
             f"📈 Volume: {funding_info['volume']}\n"
@@ -63,10 +63,10 @@ async def job_evening_summary():
 
         msg = (
             f"🌒 22:00 — {date_str}\n\n"
-            f"Bây giờ là lúc kết thúc giờ làm việc, bạn hãy quản lí tín hiệu tốt.\n"
-            f"Nhưng hãy chốt tất cả các lệnh trước khi ngủ để tránh biến động về đêm…\n"
+            f"Kết thúc ngày giao dịch, bạn hãy quản lý tín hiệu tốt.\n"
+            f"Chốt lệnh trước khi ngủ để tránh biến động về đêm…\n"
             f"Ngày mai chúng ta sẽ bắt đầu công việc mới!\n\n"
-            f"🌙 Chúc anh Trương ngủ ngon, mơ đẹp và tạm biệt! 🤗"
+            f"🌙 Chúc anh Trương ngủ ngon 🤗"
         )
 
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
