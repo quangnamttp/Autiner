@@ -1,4 +1,3 @@
-# autiner_bot/utils/state.py
 import json
 import os
 
@@ -24,6 +23,12 @@ def toggle_on_off():
     state["is_on"] = not state["is_on"]
     save_state(state)
     return state["is_on"]
+
+def set_on_off(status: bool):
+    """Bật hoặc tắt bot"""
+    state = load_state()
+    state["is_on"] = status
+    save_state(state)
 
 def set_currency_mode(mode: str):
     if mode not in ("USD", "VND"):
