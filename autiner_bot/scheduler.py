@@ -9,7 +9,6 @@ import traceback
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
-# ----- Hàm tạo tín hiệu giao dịch -----
 def create_trade_signal(symbol, last_price, change_pct):
     """Tạo tín hiệu LONG/SHORT + Market/Limit."""
     direction = "LONG" if change_pct > 0 else "SHORT"
@@ -29,11 +28,10 @@ def create_trade_signal(symbol, last_price, change_pct):
         "entry": last_price,
         "tp": tp_price,
         "sl": sl_price,
-        "strength": min(int(abs(change_pct) * 10), 100),  # Giả lập % độ mạnh
+        "strength": min(int(abs(change_pct) * 10), 100),
         "reason": f"Biến động {change_pct:.2f}% trong 15 phút"
     }
 
-# ----- Báo trước -----
 async def job_trade_signals_notice():
     try:
         state = get_state()
@@ -47,7 +45,6 @@ async def job_trade_signals_notice():
         print(f"[ERROR] job_trade_signals_notice: {e}")
         print(traceback.format_exc())
 
-# ----- Gửi tín hiệu -----
 async def job_trade_signals():
     try:
         state = get_state()
@@ -66,11 +63,15 @@ async def job_trade_signals():
             tp_price = format_price(sig['tp'], state['currency_mode'], vnd_rate)
             sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
 
+            # Hiển thị symbol dạng /VND hoặc /USD
+            suffix = "/VND" if state["currency_mode"] == "VND" else "/USD"
+            symbol_display = sig['symbol'].replace("_USDT", suffix)
+
             side_icon = "🟥 SHORT" if sig["side"] == "SHORT" else "🟩 LONG"
             highlight = "⭐ " if sig["strength"] >= 70 else ""
 
             msg = (
-                f"{highlight}📈 {sig['symbol']} — {side_icon}\n\n"
+                f"{highlight}📈 {symbol_display} — {side_icon}\n\n"
                 f"🟢 Loại lệnh: {sig['type']}\n"
                 f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
                 f"💰 Entry: {entry_price}\n"
