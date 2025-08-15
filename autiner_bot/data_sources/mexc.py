@@ -1,58 +1,45 @@
 import aiohttp
-import time
 from autiner_bot.settings import S
+import asyncio
 
 async def fetch_json(url):
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             return await resp.json()
 
-async def get_all_futures_tickers():
-    """Lấy tất cả tickers Futures từ MEXC."""
+async def get_all_tickers():
+    """Lấy tất cả tickers futures từ MEXC."""
     data = await fetch_json(S.MEXC_TICKER_URL)
-    return data.get("data", [])
-
-async def get_kline(symbol, limit=2):
-    """
-    Lấy dữ liệu nến 1 phút để tính biến động.
-    limit=2 để lấy giá hiện tại và giá 1 phút trước.
-    """
-    url = S.MEXC_KLINES_URL.format(sym=symbol)
-    data = await fetch_json(url)
     return data.get("data", [])
 
 async def get_top_moving_coins(limit=5, min_turnover=500000):
     """
-    Lọc các coin có biến động mạnh nhất dựa trên % thay đổi giá trong 15 phút gần nhất.
-    Chỉ lấy coin có thanh khoản (turnover) >= min_turnover.
+    Lấy các coin futures có biến động mạnh nhất trong 15 phút gần nhất.
+    - limit: số lượng coin trả về.
+    - min_turnover: lọc theo giá trị turnover tối thiểu (USDT) để tránh coin volume thấp.
     """
-    tickers = await get_all_futures_tickers()
-    candidates = []
+    tickers = await get_all_tickers()
+    futures = [t for t in tickers if t.get("symbol", "").endswith("_USDT")]
 
-    for t in tickers:
-        if not t.get("symbol", "").endswith("_USDT"):
-            continue
-        turnover = float(t.get("turnover", 0))
-        if turnover < min_turnover:
-            continue
+    # Lọc volume tối thiểu
+    futures = [t for t in futures if float(t.get("turnover", 0)) >= min_turnover]
 
-        klines = await get_kline(t["symbol"], limit=16)
-        if len(klines) < 2:
-            continue
-
+    # Thêm % thay đổi 15 phút gần nhất (dùng giá high/low)
+    for f in futures:
         try:
-            price_now = float(klines[-1][4])  # close
-            price_before = float(klines[0][4])
-            change_pct = ((price_now - price_before) / price_before) * 100
-            candidates.append({
-                "symbol": t["symbol"],
-                "lastPrice": price_now,
-                "turnover": turnover,
-                "change_pct": change_pct
-            })
+            last_price = float(f["lastPrice"])
+            high = float(f.get("highPrice", last_price))
+            low = float(f.get("lowPrice", last_price))
+            if low > 0:
+                change_pct = ((high - low) / low) * 100
+            else:
+                change_pct = 0
+            f["change_pct"] = change_pct
+            f["lastPrice"] = last_price
         except:
-            continue
+            f["change_pct"] = 0
+            f["lastPrice"] = 0
 
-    # Sắp xếp theo biến động tuyệt đối giảm dần
-    candidates.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
-    return candidates[:limit]
+    # Sắp xếp theo biến động giảm dần
+    futures.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
+    return futures[:limit]
