@@ -19,9 +19,9 @@ def format_price(value: float, currency: str = "VND", vnd_rate: float = None) ->
                     # Trên 1000 chỉ hiển thị nguyên + phân cách hàng nghìn
                     return f"{value:,.0f}".replace(",", ".") + " VND"
             else:
-                # Giá quá nhỏ: bỏ hết '0.' và 0 dư
+                # Giá quá nhỏ: bỏ '0.' và 0 dư thừa ở đầu
                 raw = f"{value:.12f}".rstrip('0').rstrip('.')
-                raw_no_zero = raw.lstrip('0').lstrip('.')  
+                raw_no_zero = raw.replace("0.", "").lstrip('0')
                 return raw_no_zero + " VND"
 
         else:  # USD
