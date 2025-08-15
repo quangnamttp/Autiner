@@ -1,4 +1,3 @@
-# autiner_bot/menu.py
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from autiner_bot.utils import state
@@ -7,7 +6,7 @@ from autiner_bot.utils import state
 def get_reply_menu():
     s = state.get_state()
 
-    auto_btn = "🟢 Auto ON" if s["is_on"] else "🔴 Auto OFF"
+    auto_btn = "🟢 Auto ON" if not s["is_on"] else "🔴 Auto OFF"
     currency_btn = "💴 MEXC VND" if s["currency_mode"] == "VND" else "💵 MEXC USD"
 
     keyboard = [
@@ -30,14 +29,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
+    # Bật/Tắt bot
     if text in ["🟢 Auto ON", "🔴 Auto OFF"]:
-        new_status = not state.get_state()["is_on"]
-        state.set_on_off(new_status)
-        await update.message.reply_text(
-            f"⚙️ Auto tín hiệu: {'🟢 ON' if new_status else '🔴 OFF'}",
-            reply_markup=get_reply_menu()
-        )
+        if text == "🟢 Auto ON":
+            state.set_on_off(True)
+            msg = "⚙️ Auto tín hiệu: 🟢 ON"
+        else:
+            state.set_on_off(False)
+            msg = "⚙️ Auto tín hiệu: 🔴 OFF"
+        await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
+    # Chuyển đổi đơn vị
     elif text in ["💴 MEXC VND", "💵 MEXC USD"]:
         new_mode = "USD" if state.get_state()["currency_mode"] == "VND" else "VND"
         state.set_currency_mode(new_mode)
@@ -46,6 +48,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_reply_menu()
         )
 
+    # Xem trạng thái
     elif text == "🔍 Trạng thái":
         s = state.get_state()
         msg = (
@@ -55,6 +58,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
+    # Test bot
     elif text == "🧪 Test":
         await update.message.reply_text("✅ Bot hoạt động bình thường!", reply_markup=get_reply_menu())
 
