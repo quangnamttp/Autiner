@@ -61,11 +61,17 @@ async def job_trade_signals():
         signals = [create_trade_signal(c["symbol"], c["lastPrice"], c["change_pct"]) for c in moving_coins]
 
         for sig in signals:
+            # Quy đổi giá đúng theo chế độ
             entry_price = format_price(sig['entry'], state['currency_mode'], vnd_rate)
             tp_price = format_price(sig['tp'], state['currency_mode'], vnd_rate)
             sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
 
-            symbol_display = sig['symbol'].replace("_USDT", f"/{state['currency_mode']}")
+            # Hiển thị tên cặp chuẩn
+            if state['currency_mode'] == "VND":
+                symbol_display = sig['symbol'].replace("_USDT", "/VND")
+            else:
+                symbol_display = sig['symbol'].replace("_USDT", "/USD")
+
             side_icon = "🟩 LONG" if sig["side"] == "LONG" else "🟥 SHORT"
             highlight = "⭐ " if sig["strength"] >= 70 else ""
 
