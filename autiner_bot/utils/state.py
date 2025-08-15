@@ -3,39 +3,21 @@ import os
 
 STATE_FILE = "bot_state.json"
 
-DEFAULT_STATE = {
-    "is_on": True,
-    "currency_mode": "VND"  # hoặc "USD"
-}
-
-def load_state():
+def get_state():
+    """Đọc trạng thái bot từ file."""
     if not os.path.exists(STATE_FILE):
-        save_state(DEFAULT_STATE)
-    with open(STATE_FILE, "r", encoding="utf-8") as f:
+        return {"is_on": True}
+    with open(STATE_FILE, "r") as f:
         return json.load(f)
 
 def save_state(state):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    """Lưu trạng thái bot vào file."""
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
 
-def toggle_on_off():
-    state = load_state()
-    state["is_on"] = not state["is_on"]
+def toggle_state():
+    """Bật / tắt bot."""
+    state = get_state()
+    state["is_on"] = not state.get("is_on", True)
     save_state(state)
-    return state["is_on"]
-
-def set_on_off(status: bool):
-    """Bật hoặc tắt bot"""
-    state = load_state()
-    state["is_on"] = status
-    save_state(state)
-
-def set_currency_mode(mode: str):
-    if mode not in ("USD", "VND"):
-        return
-    state = load_state()
-    state["currency_mode"] = mode
-    save_state(state)
-
-def get_state():
-    return load_state()
+    return state
