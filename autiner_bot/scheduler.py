@@ -45,6 +45,7 @@ async def job_trade_signals_notice():
         print(f"[ERROR] job_trade_signals_notice: {e}")
         print(traceback.format_exc())
 
+# ----- Gửi tín hiệu -----
 async def job_trade_signals():
     try:
         state = get_state()
@@ -59,19 +60,19 @@ async def job_trade_signals():
         signals = [create_trade_signal(c["symbol"], c["lastPrice"], c["change_pct"]) for c in moving_coins]
 
         for sig in signals:
+            # Chuyển định dạng symbol
+            base_symbol = sig['symbol'].replace("_USDT", "")
+            display_symbol = f"{base_symbol}/VND" if state["currency_mode"] == "VND" else f"{base_symbol}/USD"
+
             entry_price = format_price(sig['entry'], state['currency_mode'], vnd_rate)
             tp_price = format_price(sig['tp'], state['currency_mode'], vnd_rate)
             sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
-
-            # Hiển thị symbol dạng /VND hoặc /USD
-            suffix = "/VND" if state["currency_mode"] == "VND" else "/USD"
-            symbol_display = sig['symbol'].replace("_USDT", suffix)
 
             side_icon = "🟥 SHORT" if sig["side"] == "SHORT" else "🟩 LONG"
             highlight = "⭐ " if sig["strength"] >= 70 else ""
 
             msg = (
-                f"{highlight}📈 {symbol_display} — {side_icon}\n\n"
+                f"{highlight}📈 {display_symbol} — {side_icon}\n\n"
                 f"🟢 Loại lệnh: {sig['type']}\n"
                 f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
                 f"💰 Entry: {entry_price}\n"
