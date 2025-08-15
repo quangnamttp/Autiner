@@ -1,6 +1,5 @@
 import aiohttp
 from autiner_bot.settings import S
-import asyncio
 
 async def fetch_json(url):
     async with aiohttp.ClientSession() as session:
@@ -12,19 +11,14 @@ async def get_all_tickers():
     data = await fetch_json(S.MEXC_TICKER_URL)
     return data.get("data", [])
 
-async def get_top_moving_coins(limit=5, min_turnover=500000):
+async def get_top_moving_coins(limit=5):
     """
-    Lấy các coin futures có biến động mạnh nhất trong 15 phút gần nhất.
+    Lấy coin futures có biến động mạnh nhất hiện tại (không giới hạn turnover).
     - limit: số lượng coin trả về.
-    - min_turnover: lọc theo giá trị turnover tối thiểu (USDT) để tránh coin volume thấp.
     """
     tickers = await get_all_tickers()
     futures = [t for t in tickers if t.get("symbol", "").endswith("_USDT")]
 
-    # Lọc volume tối thiểu
-    futures = [t for t in futures if float(t.get("turnover", 0)) >= min_turnover]
-
-    # Thêm % thay đổi 15 phút gần nhất (dùng giá high/low)
     for f in futures:
         try:
             last_price = float(f["lastPrice"])
@@ -40,6 +34,5 @@ async def get_top_moving_coins(limit=5, min_turnover=500000):
             f["change_pct"] = 0
             f["lastPrice"] = 0
 
-    # Sắp xếp theo biến động giảm dần
     futures.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
     return futures[:limit]
