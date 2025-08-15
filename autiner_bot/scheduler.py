@@ -22,23 +22,28 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
         if currency == "VND":
             if not vnd_rate or vnd_rate <= 0:
                 return "N/A VND"
-            value *= vnd_rate
+            value = value * vnd_rate
             if value >= 1000:
-                s = f"{value:,.2f}".replace(",", ".")
-                return _trim_trailing_zeros(s) + " VND"
+                s = f"{value:,.12f}"
+                s = _trim_trailing_zeros(s)
+                return s + " VND"
             elif value >= 1:
-                return _trim_trailing_zeros(f"{value:.4f}") + " VND"
+                s = f"{value:.12f}"
+                s = _trim_trailing_zeros(s)
+                return s + " VND"
             else:
                 raw = f"{value:.12f}".rstrip('0').rstrip('.')
                 raw_no_zero = raw.replace("0.", "").lstrip("0")
                 return (raw_no_zero or "0") + " VND"
 
-        # USD
         if value >= 1:
-            s = f"{value:,.8f}".replace(",", ".")
-            return _trim_trailing_zeros(s)
+            s = f"{value:,.12f}".replace(",", ".")
+            s = _trim_trailing_zeros(s)
+            return s
         else:
-            return _trim_trailing_zeros(f"{value:.8f}")
+            s = f"{value:.12f}"
+            s = _trim_trailing_zeros(s)
+            return s
     except Exception:
         return f"{value} {currency}"
 
@@ -66,8 +71,10 @@ async def job_trade_signals_notice():
         state = get_state()
         if not state["is_on"]:
             return
-        await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                               text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch!")
+        await bot.send_message(
+            chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch!"
+        )
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
         print(traceback.format_exc())
@@ -80,11 +87,13 @@ async def job_trade_signals():
 
         if state["currency_mode"] == "VND":
             moving_task = asyncio.create_task(get_top_moving_coins(limit=5))
-            rate_task = asyncio.create_task(get_usdt_vnd_rate())
+            rate_task   = asyncio.create_task(get_usdt_vnd_rate())
             moving_coins, vnd_rate = await asyncio.gather(moving_task, rate_task)
-            if not vnd_rate:
-                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                       text="⚠️ Không lấy được tỷ giá USDT/VND, tạm hoãn gửi tín hiệu.")
+            if not vnd_rate or vnd_rate <= 0:
+                await bot.send_message(
+                    chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+                    text="⚠️ Không lấy được tỷ giá USDT/VND ở vòng này."
+                )
                 return
             use_currency = "VND"
         else:
@@ -93,18 +102,15 @@ async def job_trade_signals():
             use_currency = "USD"
 
         for c in moving_coins:
-            last_price = float(c.get("lastPrice", 0))
-            change_pct = float(c.get("change_pct", 0))
+            change_pct = float(c.get("change_pct", 0.0))
+            last_price = float(c.get("lastPrice", 0.0))
             sig = create_trade_signal(c["symbol"], last_price, change_pct)
-
             entry_price = format_price(sig['entry'], use_currency, vnd_rate)
-            tp_price = format_price(sig['tp'], use_currency, vnd_rate)
-            sl_price = format_price(sig['sl'], use_currency, vnd_rate)
-
+            tp_price    = format_price(sig['tp'],    use_currency, vnd_rate)
+            sl_price    = format_price(sig['sl'],    use_currency, vnd_rate)
             symbol_display = sig['symbol'].replace("_USDT", f"/{use_currency}")
             side_icon = "🟩 LONG" if sig["side"] == "LONG" else "🟥 SHORT"
             highlight = "⭐ " if sig["strength"] >= 70 else ""
-
             msg = (
                 f"{highlight}📈 {symbol_display} — {side_icon}\n\n"
                 f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
@@ -122,5 +128,5 @@ async def job_trade_signals():
 
 def register_daily_jobs(job_queue):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
-    job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz))
-    job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz))
+    job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
+    job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
