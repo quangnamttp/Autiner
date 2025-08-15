@@ -1,15 +1,15 @@
-# autiner_bot/scheduler.py
+import asyncio
+import traceback
+import pytz
+from datetime import time
 from telegram import Bot
+
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import get_top_moving_coins
 from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
-import asyncio
-import traceback
-import pytz
-from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
@@ -41,7 +41,6 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
                 raw_no_zero = raw.replace("0.", "").lstrip("0")
                 return (raw_no_zero or "0") + " VND"
 
-        # USD
         if value >= 1:
             s = f"{value:,.12f}"
             s = _trim_trailing_zeros(s)
@@ -97,7 +96,7 @@ async def job_trade_signals_notice():
         print(traceback.format_exc())
 
 # =============================
-# Gửi tín hiệu
+# Gửi tín hiệu 30 phút/lần
 # =============================
 async def job_trade_signals():
     try:
@@ -105,40 +104,26 @@ async def job_trade_signals():
         if not state["is_on"]:
             return
 
-        moving_coins = []
-        vnd_rate = None
-        use_currency = "USD"
-
         if state["currency_mode"] == "VND":
-            # Lấy ticker + tỷ giá cùng lúc
             moving_task = asyncio.create_task(get_top_moving_coins(limit=5))
             rate_task = asyncio.create_task(get_usdt_vnd_rate())
             moving_coins, vnd_rate = await asyncio.gather(moving_task, rate_task)
-
             if not vnd_rate or vnd_rate <= 0:
                 await bot.send_message(
                     chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                    text="⚠️ Không lấy được tỷ giá USDT/VND ở vòng này nên tạm hoãn gửi tín hiệu VND."
+                    text="⚠️ Không lấy được tỷ giá USDT/VND."
                 )
                 return
             use_currency = "VND"
         else:
             moving_coins = await get_top_moving_coins(limit=5)
+            vnd_rate = None
+            use_currency = "USD"
 
         for c in moving_coins:
-            change_pct = 0.0
-            try:
-                change_pct = float(c.get("change_pct", 0.0))
-            except:
-                change_pct = 0.0
-            if abs(change_pct) < 1e-9:
-                try:
-                    rf = float(c.get("riseFallRate", 0.0))
-                    change_pct = rf * 100.0 if abs(rf) < 1.0 else rf
-                except:
-                    pass
-
             last_price = float(c.get("lastPrice", 0.0))
+            change_pct = float(c.get("change_pct", 0.0))
+
             sig = create_trade_signal(c["symbol"], last_price, change_pct)
 
             entry_price = format_price(sig['entry'], use_currency, vnd_rate)
