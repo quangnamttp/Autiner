@@ -12,9 +12,8 @@ import traceback
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
-# ====== Báo trước ======
-async def job_notice_before_signal():
-    """Báo trước 1 phút sẽ có tín hiệu"""
+# ----- Báo trước -----
+async def job_trade_signals_notice():
     try:
         state = get_state()
         if not state["is_on"]:
@@ -24,13 +23,12 @@ async def job_notice_before_signal():
             text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch, chuẩn bị nhé!"
         )
     except Exception as e:
-        print(f"[ERROR] job_notice_before_signal: {e}")
+        print(f"[ERROR] job_trade_signals_notice: {e}")
         print(traceback.format_exc())
 
-# ====== Tin nhắn buổi sáng ======
+# ----- Buổi sáng -----
 async def job_morning_message():
     try:
-        print("[JOB] Morning message running...")
         state = get_state()
         if not state["is_on"]:
             return
@@ -41,10 +39,6 @@ async def job_morning_message():
             vnd_rate = await get_usdt_vnd_rate()
 
         top_coins = await get_top_coins_by_volume(limit=5)
-        if not top_coins:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="⚠️ Không lấy được danh sách coin sáng nay.")
-            return
-
         coins_list = "\n".join(
             [f"• {c['symbol']}: {format_price(float(c['lastPrice']), state['currency_mode'], vnd_rate)}"
              for c in top_coins]
@@ -57,15 +51,15 @@ async def job_morning_message():
             f"📈 Top 5 coin nổi bật:\n{coins_list}\n\n"
             f"📢 15 phút nữa sẽ có tín hiệu!"
         )
+
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         print(f"[ERROR] job_morning_message: {e}")
         print(traceback.format_exc())
 
-# ====== Gửi tín hiệu ======
+# ----- Gửi tín hiệu -----
 async def job_trade_signals():
     try:
-        print("[JOB] Trade signals running...")
         state = get_state()
         if not state["is_on"]:
             return
@@ -75,10 +69,6 @@ async def job_trade_signals():
             vnd_rate = await get_usdt_vnd_rate()
 
         top_coins = await get_top_coins_by_volume(limit=5)
-        if not top_coins:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="⚠️ Không lấy được coin để tạo tín hiệu.")
-            return
-
         scalping_signals = [generate_scalping_signal(c["symbol"]) for c in top_coins[:3]]
         swing_signals = [generate_swing_signal(c["symbol"]) for c in top_coins[3:5]]
         all_signals = scalping_signals + swing_signals
@@ -88,16 +78,12 @@ async def job_trade_signals():
             tp_price = format_price(sig['tp'], state['currency_mode'], vnd_rate)
             sl_price = format_price(sig['sl'], state['currency_mode'], vnd_rate)
 
-            # COIN/VND hoặc COIN/USD
-            symbol_display = f"{sig['symbol'].replace('_USDT', '')}/{state['currency_mode']}"
-
             side_icon = "🟥 SHORT" if sig["side"].upper() == "SHORT" else "🟩 LONG"
-            order_type_icon = "🟢" if sig["type"].lower() == "swing" else "🔹"
-
             highlight = "⭐ " if sig["strength"] >= 70 else ""
+
             msg = (
-                f"{highlight}📈 {symbol_display} — {side_icon}\n\n"
-                f"{order_type_icon} Loại lệnh: {sig['type']}\n"
+                f"{highlight}📈 {sig['symbol']} — {side_icon}\n\n"
+                f"🟢 Loại lệnh: {sig['type']}\n"
                 f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
                 f"💰 Entry: {entry_price}\n"
                 f"🎯 TP: {tp_price}\n"
@@ -106,18 +92,19 @@ async def job_trade_signals():
                 f"📌 Lý do: {sig['reason']}\n"
                 f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
             )
+
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
 
-# ====== Tổng kết ======
+# ----- Tổng kết -----
 async def job_summary():
     try:
-        print("[JOB] Summary running...")
         state = get_state()
         if not state["is_on"]:
             return
+
         msg = (
             "🌒 Tổng kết phiên hôm nay:\n"
             "📊 Hiệu suất TP/SL: (demo)\n"
