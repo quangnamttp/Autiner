@@ -1,6 +1,6 @@
 from flask import Flask, request
 from telegram import Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from apscheduler.schedulers.background import BackgroundScheduler
 import asyncio
 import threading
@@ -15,10 +15,10 @@ app = Flask(__name__)
 bot_loop = asyncio.new_event_loop()
 application = Application.builder().token(S.TELEGRAM_BOT_TOKEN).build()
 
-# Handlers
+# ====== Handlers ======
 application.add_handler(CommandHandler("start", menu.start_command))
+# Xử lý các nút trong Reply Keyboard
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu.text_handler))
-application.add_handler(CallbackQueryHandler(menu.button_handler))
 
 # ====== Init bot & webhook ======
 async def init_bot():
