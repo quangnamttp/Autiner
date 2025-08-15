@@ -1,60 +1,44 @@
-import asyncio
-import traceback
-import pytz
-from datetime import time
+# autiner_bot/scheduler.py
 from telegram import Bot
-
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import get_top_moving_coins
 from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
+import asyncio
+import traceback
+import pytz
+from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
 # =============================
-# Helpers: format giá
+# Hàm format giá
 # =============================
-def _trim_trailing_zeros(s: str) -> str:
-    if "." in s:
-        s = s.rstrip("0").rstrip(".")
-    return s
-
 def format_price(value: float, currency: str = "USD", vnd_rate: float | None = None) -> str:
+    """Định dạng giá hiển thị"""
     try:
         if currency == "VND":
             if not vnd_rate or vnd_rate <= 0:
                 return "N/A VND"
             value = value * vnd_rate
-
             if value >= 1000:
-                s = f"{value:,.12f}"
-                s = _trim_trailing_zeros(s)
-                return s + " VND"
+                return f"{value:,.0f}".replace(",", ".") + " VND"
             elif value >= 1:
-                s = f"{value:.12f}"
-                s = _trim_trailing_zeros(s)
-                return s + " VND"
+                return f"{value:.4f}".rstrip("0").rstrip(".") + " VND"
             else:
-                raw = f"{value:.12f}".rstrip('0').rstrip('.')
-                raw_no_zero = raw.replace("0.", "").lstrip("0")
-                return (raw_no_zero or "0") + " VND"
-
-        if value >= 1:
-            s = f"{value:,.12f}"
-            s = _trim_trailing_zeros(s)
-            s = s.replace(",", ".")
-            return s
-        else:
-            s = f"{value:.12f}"
-            s = _trim_trailing_zeros(s)
-            return s
+                return str(int(value)) + " VND"
+        else:  # USD
+            if value >= 1:
+                return f"{value:,.8f}".rstrip("0").rstrip(".").replace(",", ".")
+            else:
+                return f"{value:.8f}".rstrip("0").rstrip(".")
     except Exception:
         return f"{value} {currency}"
 
 # =============================
-# Tạo tín hiệu
+# Tạo tín hiệu giao dịch
 # =============================
 def create_trade_signal(symbol: str, last_price: float, change_pct: float):
     direction = "LONG" if change_pct > 0 else "SHORT"
@@ -63,8 +47,8 @@ def create_trade_signal(symbol: str, last_price: float, change_pct: float):
     tp_pct = 0.5 if direction == "LONG" else -0.5
     sl_pct = -0.3 if direction == "LONG" else 0.3
 
-    tp_price = last_price * (1 + tp_pct / 100.0)
-    sl_price = last_price * (1 + sl_pct / 100.0)
+    tp_price = last_price * (1 + tp_pct / 100)
+    sl_price = last_price * (1 + sl_pct / 100)
 
     strength = max(1, min(int(abs(change_pct) * 10), 100))
 
@@ -96,7 +80,7 @@ async def job_trade_signals_notice():
         print(traceback.format_exc())
 
 # =============================
-# Gửi tín hiệu 30 phút/lần
+# Gửi tín hiệu giao dịch
 # =============================
 async def job_trade_signals():
     try:
@@ -104,33 +88,36 @@ async def job_trade_signals():
         if not state["is_on"]:
             return
 
-        if state["currency_mode"] == "VND":
+        currency_mode = state.get("currency_mode", "USD")
+        vnd_rate = None
+
+        # Lấy dữ liệu song song
+        if currency_mode == "VND":
             moving_task = asyncio.create_task(get_top_moving_coins(limit=5))
             rate_task = asyncio.create_task(get_usdt_vnd_rate())
             moving_coins, vnd_rate = await asyncio.gather(moving_task, rate_task)
+
             if not vnd_rate or vnd_rate <= 0:
                 await bot.send_message(
                     chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                    text="⚠️ Không lấy được tỷ giá USDT/VND."
+                    text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy."
                 )
                 return
-            use_currency = "VND"
         else:
             moving_coins = await get_top_moving_coins(limit=5)
-            vnd_rate = None
-            use_currency = "USD"
 
-        for c in moving_coins:
-            last_price = float(c.get("lastPrice", 0.0))
-            change_pct = float(c.get("change_pct", 0.0))
+        # Xử lý tất cả coin trong 1 batch
+        for coin in moving_coins:
+            change_pct = coin.get("change_pct", 0.0)
+            last_price = coin.get("lastPrice", 0.0)
 
-            sig = create_trade_signal(c["symbol"], last_price, change_pct)
+            sig = create_trade_signal(coin["symbol"], last_price, change_pct)
 
-            entry_price = format_price(sig['entry'], use_currency, vnd_rate)
-            tp_price = format_price(sig['tp'], use_currency, vnd_rate)
-            sl_price = format_price(sig['sl'], use_currency, vnd_rate)
+            entry_price = format_price(sig["entry"], currency_mode, vnd_rate)
+            tp_price = format_price(sig["tp"], currency_mode, vnd_rate)
+            sl_price = format_price(sig["sl"], currency_mode, vnd_rate)
 
-            symbol_display = sig['symbol'].replace("_USDT", f"/{use_currency}")
+            symbol_display = sig["symbol"].replace("_USDT", f"/{currency_mode}")
             side_icon = "🟩 LONG" if sig["side"] == "LONG" else "🟥 SHORT"
             highlight = "⭐ " if sig["strength"] >= 70 else ""
 
