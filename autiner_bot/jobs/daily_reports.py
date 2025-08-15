@@ -2,8 +2,8 @@ from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
-from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
-from autiner_bot.data_sources.mexc import get_top_moving_coins, get_market_sentiment, get_market_funding_volume
+from autiner_bot.data_sources.mexc import get_top_moving_coins
+from autiner_bot.data_sources.exchange import get_usdt_vnd_rate, get_market_sentiment, get_market_funding_volume
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
@@ -20,7 +20,7 @@ async def job_morning_message():
 
         # Giá USD -> VND
         vnd_rate = await get_usdt_vnd_rate()
-        usd_to_vnd = f"{vnd_rate:,.0f}".replace(",", ".")
+        usd_to_vnd = f"{vnd_rate:,.0f}".replace(",", ".") if vnd_rate else "N/A"
 
         # Xu hướng thị trường
         sentiment = await get_market_sentiment()  # {"long": 65.2, "short": 34.8}
