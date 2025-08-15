@@ -1,4 +1,3 @@
-# autiner_bot/main.py
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
@@ -17,9 +16,9 @@ bot_loop = asyncio.new_event_loop()
 application = Application.builder().token(S.TELEGRAM_BOT_TOKEN).build()
 
 # Handlers
-application.add_handler(CommandHandler("start", menu.start_command))  # Gọi menu
-application.add_handler(CallbackQueryHandler(menu.button_handler))    # Inline
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu.text_handler))  # ReplyKeyboard
+application.add_handler(CommandHandler("start", menu.start_command))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu.text_handler))
+application.add_handler(CallbackQueryHandler(menu.button_handler))
 
 # ====== Init bot & webhook ======
 async def init_bot():
