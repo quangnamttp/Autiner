@@ -5,7 +5,10 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import get_top_moving_coins
 from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
 from autiner_bot.utils.format_utils import format_price
+from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 import traceback
+import pytz
+from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
@@ -81,3 +84,9 @@ async def job_trade_signals():
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
+
+# Hàm đăng ký lịch cho 6h và 22h
+def register_daily_jobs(job_queue):
+    tz = pytz.timezone("Asia/Ho_Chi_Minh")
+    job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
+    job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
