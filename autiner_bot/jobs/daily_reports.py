@@ -1,9 +1,10 @@
+# autiner_bot/jobs/daily_reports.py
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
-    get_top_moving_coins,
+    get_top_signals,           # ✅ đổi sang hàm mới
     get_market_sentiment,
     get_market_funding_volume
 )
@@ -20,7 +21,7 @@ async def job_morning_message():
             return
 
         now = get_vietnam_time()
-        weekday = now.strftime("%A")   # Thứ tiếng Việt
+        weekday = now.strftime("%A")   # Thứ
         date_str = now.strftime("%d/%m/%Y")
 
         # Giá USD -> VND
@@ -30,8 +31,8 @@ async def job_morning_message():
         # Xu hướng thị trường
         sentiment = await get_market_sentiment()
 
-        # Top 5 coin tăng trưởng
-        top_coins = await get_top_moving_coins(limit=5)
+        # Top 5 coin phân tích chuyên sâu
+        top_coins = await get_top_signals(limit=5)
 
         # Funding & Volume
         funding_info = await get_market_funding_volume()
@@ -42,13 +43,17 @@ async def job_morning_message():
         else:
             greeting = f"🌞 06:00 — Chào buổi sáng anh Trương ☀️, thị trường hôm nay có nhiều biến động, mình cùng theo dõi nhé!"
 
+        # Ghép tin nhắn
         msg = (
             f"📅 Hôm nay {weekday} — {date_str}\n"
             f"{greeting}\n\n"
             f"💵 1 USD = {usd_to_vnd} VND\n"
             f"📊 Thị trường nghiêng về: LONG {sentiment['long']:.1f}% | SHORT {sentiment['short']:.1f}%\n\n"
             f"🔥 5 đồng coin nổi bật:\n" +
-            "\n".join([f"• {c['symbol'].replace('_USDT','/USDT')} {c['change_pct']:+.2f}%" for c in top_coins]) + "\n\n"
+            "\n".join([
+                f"• {c['symbol'].replace('_USDT','/USDT')} {c['change_pct']:+.2f}%" 
+                for c in top_coins
+            ]) + "\n\n"
             f"💹 Funding: {funding_info['funding']}\n"
             f"📈 Volume: {funding_info['volume']}\n"
             f"📌 Xu hướng: {funding_info['trend']}\n\n"
