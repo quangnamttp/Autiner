@@ -1,7 +1,8 @@
 import json
 import os
 
-STATE_FILE = "/tmp/bot_state.json"
+# Lưu ngay tại thư mục dự án (ổn định hơn /tmp)
+STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "bot_state.json")
 
 DEFAULT_STATE = {
     "is_on": True,
