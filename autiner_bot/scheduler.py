@@ -3,7 +3,7 @@ from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
-from autiner_bot.data_sources.mexc import get_top_moving_coins
+from autiner_bot.data_sources.mexc import get_all_futures  # ✅ sửa lại: lấy toàn bộ coin
 from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 import asyncio
@@ -17,7 +17,6 @@ bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 # Hàm format giá
 # =============================
 def format_price(value: float, currency: str = "USD", vnd_rate: float | None = None) -> str:
-    """Định dạng giá hiển thị"""
     try:
         if currency == "VND":
             if not vnd_rate or vnd_rate <= 0:
@@ -31,18 +30,20 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
                 return str(int(value)) + " VND"
         else:  # USD
             if value >= 1:
-                return f"{value:,.8f}".rstrip("0").rstrip(".").replace(",", ".")
+                return f"{value:,.4f}".replace(",", ".")
             else:
                 return f"{value:.8f}".rstrip("0").rstrip(".")
     except Exception:
         return f"{value} {currency}"
 
 # =============================
-# Tạo tín hiệu giao dịch
+# Tạo tín hiệu MARKET
 # =============================
 def create_trade_signal(symbol: str, last_price: float, change_pct: float):
     direction = "LONG" if change_pct > 0 else "SHORT"
-    order_type = "MARKET" if abs(change_pct) > 2 else "LIMIT"
+
+    # Luôn MARKET
+    order_type = "MARKET"
 
     tp_pct = 0.5 if direction == "LONG" else -0.5
     sl_pct = -0.3 if direction == "LONG" else 0.3
@@ -50,6 +51,7 @@ def create_trade_signal(symbol: str, last_price: float, change_pct: float):
     tp_price = last_price * (1 + tp_pct / 100)
     sl_price = last_price * (1 + sl_pct / 100)
 
+    # Độ mạnh dựa trên % biến động
     strength = max(1, min(int(abs(change_pct) * 10), 100))
 
     return {
@@ -91,23 +93,22 @@ async def job_trade_signals():
         currency_mode = state.get("currency_mode", "USD")
         vnd_rate = None
 
-        # Lấy dữ liệu song song
-        if currency_mode == "VND":
-            moving_task = asyncio.create_task(get_top_moving_coins(limit=5))
-            rate_task = asyncio.create_task(get_usdt_vnd_rate())
-            moving_coins, vnd_rate = await asyncio.gather(moving_task, rate_task)
+        # Lấy toàn bộ coin từ MEXC
+        coins = await get_all_futures()  # ✅ hàm mới: trả về full list {symbol, lastPrice, change_pct, volume}
 
+        # Lọc top 5 coin theo volume lớn nhất
+        coins_sorted = sorted(coins, key=lambda x: x.get("volume", 0), reverse=True)[:5]
+
+        if currency_mode == "VND":
+            vnd_rate = await get_usdt_vnd_rate()
             if not vnd_rate or vnd_rate <= 0:
                 await bot.send_message(
                     chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                     text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy."
                 )
                 return
-        else:
-            moving_coins = await get_top_moving_coins(limit=5)
 
-        # Xử lý tất cả coin trong 1 batch
-        for coin in moving_coins:
+        for coin in coins_sorted:
             change_pct = coin.get("change_pct", 0.0)
             last_price = coin.get("lastPrice", 0.0)
 
@@ -117,13 +118,14 @@ async def job_trade_signals():
             tp_price = format_price(sig["tp"], currency_mode, vnd_rate)
             sl_price = format_price(sig["sl"], currency_mode, vnd_rate)
 
+            # Hiển thị đẹp hơn
             symbol_display = sig["symbol"].replace("_USDT", f"/{currency_mode}")
             side_icon = "🟩 LONG" if sig["side"] == "LONG" else "🟥 SHORT"
             highlight = "⭐ " if sig["strength"] >= 70 else ""
 
             msg = (
                 f"{highlight}📈 {symbol_display} — {side_icon}\n\n"
-                f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
+                f"🔹 Lệnh: {sig['orderType']}\n"
                 f"💰 Entry: {entry_price}\n"
                 f"🎯 TP: {tp_price}\n"
                 f"🛡️ SL: {sl_price}\n"
