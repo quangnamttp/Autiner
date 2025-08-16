@@ -3,44 +3,34 @@ import aiohttp
 from autiner_bot.settings import S
 
 # =============================
-# Lấy tỷ giá USDT/VND
+# Lấy tỷ giá USDT/VND từ Binance P2P
 # =============================
 async def get_usdt_vnd_rate():
     """
-    Lấy tỷ giá USDT/VND bằng cách:
-    - Lấy giá USDT/USD từ MEXC
-    - Lấy tỷ giá USD/VND từ Coingecko
-    => Nhân lại để ra USDT/VND
+    Lấy tỷ giá USDT/VND từ Binance P2P (ổn định hơn MEXC/Coingecko).
     """
     try:
+        url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
+        payload = {
+            "asset": "USDT",
+            "fiat": "VND",
+            "tradeType": "BUY",
+            "page": 1,
+            "rows": 1,
+            "payTypes": []
+        }
+        headers = {"Content-Type": "application/json"}
+
         async with aiohttp.ClientSession() as session:
-            # 1. Lấy giá USDT/USD trên MEXC
-            async with session.get(S.MEXC_TICKER_URL, timeout=10) as resp1:
-                data1 = await resp1.json()
-                usdt_usd = None
-                if data1.get("success") and "data" in data1:
-                    for item in data1["data"]:
-                        if item["symbol"] == "BTC_USDT":  # lấy BTC làm chuẩn check
-                            usdt_usd = 1.0  # USDT ~ USD
-                            break
-
-            # 2. Lấy tỷ giá USD/VND từ Coingecko
-            url = "https://api.coingecko.com/api/v3/simple/price?ids=tether,usd&vs_currencies=vnd"
-            async with session.get(url, timeout=10) as resp2:
-                data2 = await resp2.json()
-                if "tether" in data2 and "vnd" in data2["tether"]:
-                    usdt_vnd = float(data2["tether"]["vnd"])
-                    return usdt_vnd
-
-            # fallback: nếu không có, dùng tỷ giá USD
-            if "usd" in data2 and "vnd" in data2["usd"]:
-                usd_vnd = float(data2["usd"]["vnd"])
-                return usd_vnd * (usdt_usd or 1)
-
+            async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
+                data = await resp.json()
+                if "data" in data and len(data["data"]) > 0:
+                    price = float(data["data"][0]["adv"]["price"])
+                    return price
     except Exception as e:
-        print(f"[ERROR] get_usdt_vnd_rate: {e}")
+        print(f"[ERROR] get_usdt_vnd_rate (Binance): {e}")
 
-    # fallback cuối cùng
+    # fallback cuối cùng nếu lỗi
     return 25000.0
 
 
