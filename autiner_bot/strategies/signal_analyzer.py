@@ -49,14 +49,15 @@ async def fetch_klines(symbol: str, limit: int = 100):
 
 
 # =============================
-# Phân tích tín hiệu
+# Phân tích tín hiệu nâng cấp
 # =============================
 async def analyze_coin_signal(coin: dict) -> dict:
     """
-    Phân tích kỹ thuật nâng cấp:
-    - RSI (14 kỳ, dữ liệu thật)
+    Phân tích kỹ thuật:
+    - RSI (14 kỳ, dữ liệu thực)
     - MA5, MA20
-    - TP/SL động theo độ biến động
+    - Entry linh hoạt (Market/Limit)
+    - TP/SL động theo biến động
     """
     symbol = coin["symbol"]
     last_price = coin["lastPrice"]
@@ -89,34 +90,45 @@ async def analyze_coin_signal(coin: dict) -> dict:
     else:
         side = "LONG" if change_pct >= 0 else "SHORT"
 
-    # --- Order type ---
-    order_type = "MARKET" if abs(change_pct) > 2 else "LIMIT"
+    # --- Order type & Entry ---
+    if abs(change_pct) > 2:  # biến động mạnh -> Market
+        order_type = "MARKET"
+        entry_price = last_price
+    else:  # biến động vừa/nhỏ -> Limit
+        order_type = "LIMIT"
+        if side == "LONG":
+            entry_price = min(last_price, ma5)  # mua rẻ hơn ở MA5
+        else:  # SHORT
+            entry_price = max(last_price, ma5)  # bán cao hơn ở MA5
 
     # --- TP/SL động ---
     base_volatility = max(1.0, abs(change_pct))
-    tp_pct = base_volatility * 0.8
-    sl_pct = base_volatility * 0.4
+    tp_pct = base_volatility * 1.0
+    sl_pct = 0.5
 
     if side == "SHORT":
-        tp_pct = -tp_pct
-        sl_pct = 0.5  # SHORT thì SL fix +0.5%
+        tp_pct = -tp_pct  # TP âm cho lệnh SHORT
 
-    tp_price = last_price * (1 + tp_pct / 100)
-    sl_price = last_price * (1 + sl_pct / 100)
+    tp_price = entry_price * (1 + tp_pct / 100)
+    sl_price = entry_price * (1 + sl_pct / 100)
 
     # --- Strength ---
     strength = min(100, max(1, int(abs(change_pct) * 10)))
-    if side == "LONG" and rsi < 30:
-        strength = min(100, strength + 20)
-    if side == "SHORT" and rsi > 70:
-        strength = min(100, strength + 20)
+    if side == "LONG" and rsi < 25:
+        strength = min(100, strength + 30)
+    if side == "SHORT" and rsi > 75:
+        strength = min(100, strength + 30)
 
     return {
         "symbol": symbol,
         "direction": side,
         "orderType": order_type,
+        "entry": entry_price,
+        "tp": tp_price,
+        "sl": sl_price,
         "tp_pct": tp_pct,
         "sl_pct": sl_pct,
         "strength": strength,
-        "reason": f"RSI {rsi_signal} ({rsi:.1f}) | MA {ma_signal} (MA5={ma5:.4f}, MA20={ma20:.4f}) | Biến động {change_pct:.2f}%"
+        "reason": f"RSI {rsi_signal} ({rsi:.1f}) | MA {ma_signal} "
+                  f"(MA5={ma5:.4f}, MA20={ma20:.4f}) | Biến động {change_pct:.2f}%"
     }
