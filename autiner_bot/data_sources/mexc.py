@@ -1,17 +1,18 @@
-# autiner_bot/data_sources/mexc.py
 import aiohttp
+import numpy as np
+import talib
 from autiner_bot.settings import S
 
 # =============================
-# Hàm fetch chung
+# Hàm fetch
 # =============================
 async def fetch_json(url: str):
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
+        async with session.get(url, timeout=10) as resp:
             return await resp.json()
 
 # =============================
-# Lấy toàn bộ tickers futures
+# Lấy toàn bộ tickers
 # =============================
 async def get_all_tickers():
     """Lấy tất cả tickers futures từ MEXC."""
@@ -23,87 +24,95 @@ async def get_all_tickers():
         return []
 
 # =============================
-# Lấy top coin mạnh nhất
+# Lấy dữ liệu Kline
+# =============================
+async def get_klines(symbol: str, limit: int = 200):
+    """Lấy dữ liệu nến để phân tích kỹ thuật."""
+    try:
+        url = S.MEXC_KLINES_URL.format(sym=symbol)
+        data = await fetch_json(url)
+        klines = data.get("data", [])
+        closes = [float(k[4]) for k in klines[-limit:]]  # giá đóng cửa
+        return np.array(closes, dtype=float)
+    except Exception as e:
+        print(f"[ERROR] get_klines {symbol}: {e}")
+        return np.array([])
+
+# =============================
+# Phân tích kỹ thuật
+# =============================
+def analyze_coin(closes: np.ndarray):
+    """Phân tích kỹ thuật chuyên sâu (RSI, MA, MACD)."""
+    if closes.size < 50:
+        return {"score": 0, "signals": []}
+
+    signals = []
+    score = 0
+
+    # RSI
+    rsi = talib.RSI(closes, timeperiod=14)
+    latest_rsi = rsi[-1]
+    if latest_rsi < 30:
+        signals.append("RSI quá bán → LONG")
+        score += 2
+    elif latest_rsi > 70:
+        signals.append("RSI quá mua → SHORT")
+        score += 2
+
+    # MA crossover
+    ma_fast = talib.SMA(closes, timeperiod=9)
+    ma_slow = talib.SMA(closes, timeperiod=21)
+    if ma_fast[-1] > ma_slow[-1]:
+        signals.append("MA9 > MA21 → xu hướng tăng")
+        score += 2
+    else:
+        signals.append("MA9 < MA21 → xu hướng giảm")
+        score += 2
+
+    # MACD
+    macd, signal, hist = talib.MACD(closes, 12, 26, 9)
+    if hist[-1] > 0:
+        signals.append("MACD dương → xu hướng tăng")
+        score += 1
+    else:
+        signals.append("MACD âm → xu hướng giảm")
+        score += 1
+
+    return {"score": score, "signals": signals}
+
+# =============================
+# Chọn top coin mạnh nhất
 # =============================
 async def get_top_moving_coins(limit=5):
-    """
-    Lấy coin futures biến động mạnh nhất & volume cao nhất.
-    Ưu tiên volume + % biến động tại thời điểm hiện tại.
-    """
     tickers = await get_all_tickers()
     futures = [t for t in tickers if t.get("symbol", "").endswith("_USDT")]
 
-    ranked = []
+    results = []
     for f in futures:
         try:
+            symbol = f["symbol"]
             last_price = float(f.get("lastPrice", 0))
-            volume = float(f.get("volume", 0))  # volume theo USDT
+            volume = float(f.get("volume", 0))
             rf = float(f.get("riseFallRate", 0))
-
-            # % biến động
             change_pct = rf * 100 if abs(rf) < 10 else rf
 
-            # Chỉ số xếp hạng = |% biến động| * volume
-            score = abs(change_pct) * volume
+            closes = await get_klines(symbol)
+            analysis = analyze_coin(closes)
 
-            ranked.append({
-                "symbol": f["symbol"],
+            score = analysis["score"]
+            # Ưu tiên volume + biến động + phân tích kỹ thuật
+            final_score = score + (abs(change_pct) / 2) + (np.log(volume + 1) / 10)
+
+            results.append({
+                "symbol": symbol,
                 "lastPrice": last_price,
                 "volume": volume,
                 "change_pct": change_pct,
-                "score": score
+                "score": final_score,
+                "signals": analysis["signals"]
             })
-        except:
+        except Exception:
             continue
 
-    # Sắp xếp theo score giảm dần
-    ranked.sort(key=lambda x: x["score"], reverse=True)
-
-    return ranked[:limit]
-
-# =============================
-# Long/Short sentiment BTC
-# =============================
-async def get_market_sentiment():
-    """Tỷ lệ Long/Short BTC."""
-    try:
-        url = "https://contract.mexc.com/api/v1/contract/long_short_account_ratio?symbol=BTC_USDT&period=5m"
-        data = await fetch_json(url)
-        if data.get("success") and data.get("data"):
-            latest = data["data"][-1]
-            return {
-                "long": float(latest.get("longAccount", 0)),
-                "short": float(latest.get("shortAccount", 0))
-            }
-    except Exception as e:
-        print(f"[ERROR] get_market_sentiment: {e}")
-    return {"long": 0.0, "short": 0.0}
-
-# =============================
-# Funding, volume, trend BTC
-# =============================
-async def get_market_funding_volume():
-    """Funding, volume, xu hướng BTC."""
-    try:
-        funding_url = "https://contract.mexc.com/api/v1/contract/funding_rate?symbol=BTC_USDT"
-        funding_data = await fetch_json(funding_url)
-        funding_rate = funding_data.get("data", {}).get("fundingRate", "0%")
-
-        tickers = await get_all_tickers()
-        volume = "N/A"
-        trend = "N/A"
-        for item in tickers:
-            if item.get("symbol") == "BTC_USDT":
-                volume = f"{float(item.get('volume', 0)) / 1_000_000:.2f}M USDT"
-                change_pct = float(item.get("riseFallRate", 0))
-                trend = "📈 Tăng" if change_pct > 0 else "📉 Giảm" if change_pct < 0 else "➖ Đi ngang"
-                break
-
-        return {
-            "funding": funding_rate,
-            "volume": volume,
-            "trend": trend
-        }
-    except Exception as e:
-        print(f"[ERROR] get_market_funding_volume: {e}")
-    return {"funding": "0%", "volume": "N/A", "trend": "N/A"}
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:limit]
