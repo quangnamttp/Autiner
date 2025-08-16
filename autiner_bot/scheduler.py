@@ -14,6 +14,7 @@ from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
+
 # =============================
 # Hàm format giá
 # =============================
@@ -37,6 +38,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
     except Exception:
         return str(value)
 
+
 # =============================
 # Tạo tín hiệu giao dịch
 # =============================
@@ -58,12 +60,13 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
 
     # Trend coin (nếu detect_trend có gán)
     trend_name = coin.get("trend", "Khác")
+    trade_style = mode.upper()  # SCALPING hoặc SWING
 
     msg = (
         f"{highlight}📈 {symbol_display}\n"
-        f"{side_icon} - {mode}\n"
+        f"{side_icon} - {trade_style}\n"
         f"🔹 Trend: {trend_name}\n"
-        f"🔹 Kiểu vào lệnh: {signal['orderType']}\n"
+        f"🔹 Kiểu vào lệnh: {signal['orderType'].upper()}\n"
         f"💰 Entry: {entry_price} {currency_mode}\n"
         f"🎯 TP: {tp_price} {currency_mode}\n"
         f"🛡️ SL: {sl_price} {currency_mode}\n"
@@ -72,6 +75,7 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
         f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
     )
     return msg
+
 
 # =============================
 # Báo trước 1 phút
@@ -88,6 +92,7 @@ async def job_trade_signals_notice(_=None):
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
         print(traceback.format_exc())
+
 
 # =============================
 # Gửi tín hiệu giao dịch
@@ -126,6 +131,7 @@ async def job_trade_signals(_=None):
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
+
 
 # =============================
 # Đăng ký job sáng, tối và tín hiệu
