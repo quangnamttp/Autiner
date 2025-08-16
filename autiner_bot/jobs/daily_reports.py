@@ -4,11 +4,11 @@ from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
-    get_top_signals,           # ✅ đổi sang hàm mới
+    get_top_signals,           # ✅ lấy top coin phân tích chuyên sâu
     get_market_sentiment,
-    get_market_funding_volume
+    get_market_funding_volume,
+    get_usdt_vnd_rate          # ✅ giờ đã gộp vào mexc.py
 )
-from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
@@ -39,16 +39,23 @@ async def job_morning_message():
 
         # Thông điệp theo tình hình
         if sentiment["short"] > 60 or sum(1 for c in top_coins if c["change_pct"] < 0) >= 3:
-            greeting = f"🌞 06:00 — Chào buổi sáng anh Trương ☀️, thị trường hôm nay có dấu hiệu giảm mạnh, hãy cẩn trọng nhé!"
+            greeting = (
+                f"🌞 06:00 — Chào buổi sáng anh Trương ☀️, "
+                f"thị trường hôm nay có dấu hiệu giảm mạnh, hãy cẩn trọng nhé!"
+            )
         else:
-            greeting = f"🌞 06:00 — Chào buổi sáng anh Trương ☀️, thị trường hôm nay có nhiều biến động, mình cùng theo dõi nhé!"
+            greeting = (
+                f"🌞 06:00 — Chào buổi sáng anh Trương ☀️, "
+                f"thị trường hôm nay có nhiều biến động, mình cùng theo dõi nhé!"
+            )
 
         # Ghép tin nhắn
         msg = (
             f"📅 Hôm nay {weekday} — {date_str}\n"
             f"{greeting}\n\n"
             f"💵 1 USD = {usd_to_vnd} VND\n"
-            f"📊 Thị trường nghiêng về: LONG {sentiment['long']:.1f}% | SHORT {sentiment['short']:.1f}%\n\n"
+            f"📊 Thị trường nghiêng về: "
+            f"LONG {sentiment['long']:.1f}% | SHORT {sentiment['short']:.1f}%\n\n"
             f"🔥 5 đồng coin nổi bật:\n" +
             "\n".join([
                 f"• {c['symbol'].replace('_USDT','/USDT')} {c['change_pct']:+.2f}%" 
