@@ -2,6 +2,11 @@ from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from autiner_bot.utils import state
 
+# import thêm các job để test
+from autiner_bot.scheduler import job_trade_signals_notice, job_trade_signals
+from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
+
+
 # ==== Hàm tạo menu động theo trạng thái ====
 def get_reply_menu():
     s = state.get_state()
@@ -15,6 +20,7 @@ def get_reply_menu():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+
 # ==== /start Command ====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = state.get_state()
@@ -24,6 +30,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Auto: {'ON' if s['is_on'] else 'OFF'}"
     )
     await update.message.reply_text(msg, reply_markup=get_reply_menu())
+
 
 # ==== Handler cho Reply Keyboard ====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -58,26 +65,23 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
-    # Test toàn bộ bot
+    # Test bot (giả lập toàn bộ luồng 1 ngày)
     elif text == "🧪 Test":
-        try:
-            from autiner_bot import scheduler
+        await update.message.reply_text("🔍 Đang test toàn bộ tính năng...")
 
-            # Gọi lần lượt các job chính
-            await scheduler.job_morning_message()
-            await scheduler.job_trade_signals_notice()
-            await scheduler.job_trade_signals()
-            await scheduler.job_evening_summary()
+        # Giả lập buổi sáng
+        await job_morning_message()
 
-            await update.message.reply_text(
-                "✅ Đã test xong toàn bộ chức năng (6h + tín hiệu + 22h)!",
-                reply_markup=get_reply_menu()
-            )
-        except Exception as e:
-            await update.message.reply_text(
-                f"⚠️ Test lỗi: {e}",
-                reply_markup=get_reply_menu()
-            )
+        # Giả lập báo trước tín hiệu
+        await job_trade_signals_notice()
+
+        # Giả lập gửi tín hiệu
+        await job_trade_signals()
+
+        # Giả lập tổng kết buổi tối
+        await job_evening_summary()
+
+        await update.message.reply_text("✅ Test toàn bộ tính năng hoàn tất!", reply_markup=get_reply_menu())
 
     else:
         await update.message.reply_text("⚠️ Lệnh không hợp lệ!", reply_markup=get_reply_menu())
