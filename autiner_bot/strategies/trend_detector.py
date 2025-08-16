@@ -1,8 +1,8 @@
+# autiner_bot/strategies/trend_detector.py
 import aiohttp
 import numpy as np
 from autiner_bot.settings import S
 from autiner_bot.strategies.signal_analyzer import calculate_rsi, fetch_klines
-
 
 TREND_KEYWORDS = {
     "AI": ["AI", "GPT", "NEURAL", "BOT", "FET", "RNDR", "AGIX"],
@@ -13,15 +13,13 @@ TREND_KEYWORDS = {
 }
 
 
-async def detect_trend(limit: int = 5):
+async def detect_trend(limit: int = 5, volume_top: int = 50):
     """
     Lọc coin theo trend mạnh:
-    - Lấy dữ liệu từ MEXC ticker.
-    - Lọc coin có volume cao (bỏ coin rác).
-    - Nhận diện trend dựa vào symbol.
-    - Tính RSI & MA để sàng lọc thêm.
-    - Ưu tiên coin biến động mạnh nhất.
-    Trả về: danh sách coin kèm trend & phân tích cơ bản.
+    1. Lấy dữ liệu từ MEXC ticker.
+    2. Lọc ra top {volume_top} coin có volume cao nhất.
+    3. Trong đó, chọn {limit} coin có biến động mạnh nhất.
+    4. Trả về: danh sách coin kèm trend & phân tích cơ bản.
     """
     try:
         url = S.MEXC_TICKER_URL
@@ -31,16 +29,14 @@ async def detect_trend(limit: int = 5):
                 if not data.get("success"):
                     return []
 
-                results = []
+                all_coins = []
                 for c in data.get("data", []):
                     if not c["symbol"].endswith("_USDT"):
                         continue
-                    volume = float(c.get("volume", 0))
-                    if volume < 1_000_000:  # loại coin thanh khoản thấp
-                        continue
 
-                    change_pct = float(c.get("riseFallRate", 0))
+                    volume = float(c.get("volume", 0))
                     last_price = float(c.get("lastPrice", 0))
+                    change_pct = float(c.get("riseFallRate", 0))
 
                     # Nhận diện trend
                     trend = "Khác"
@@ -49,29 +45,43 @@ async def detect_trend(limit: int = 5):
                             trend = t
                             break
 
-                    # Lấy dữ liệu kỹ thuật
-                    closes = await fetch_klines(c["symbol"], limit=30)
-                    if not closes:
-                        closes = [last_price] * 20
-
-                    rsi = calculate_rsi(closes, 14)
-                    ma5 = np.mean(closes[-5:]) if len(closes) >= 5 else last_price
-                    ma20 = np.mean(closes[-20:]) if len(closes) >= 20 else last_price
-
-                    results.append({
+                    all_coins.append({
                         "symbol": c["symbol"],
                         "lastPrice": last_price,
                         "volume": volume,
                         "change_pct": change_pct,
-                        "trend": trend,
+                        "trend": trend
+                    })
+
+                # 1️⃣ Lọc top volume
+                top_volume = sorted(all_coins, key=lambda x: x["volume"], reverse=True)[:volume_top]
+
+                results = []
+                for coin in top_volume:
+                    closes = await fetch_klines(coin["symbol"], limit=30)
+                    if not closes:
+                        closes = [coin["lastPrice"]] * 20
+
+                    rsi = calculate_rsi(closes, 14)
+                    ma5 = np.mean(closes[-5:]) if len(closes) >= 5 else coin["lastPrice"]
+                    ma20 = np.mean(closes[-20:]) if len(closes) >= 20 else coin["lastPrice"]
+
+                    coin.update({
                         "rsi": rsi,
                         "ma5": ma5,
                         "ma20": ma20
                     })
+                    results.append(coin)
 
-                # Sắp xếp theo độ biến động mạnh nhất
+                # 2️⃣ Chọn theo biến động mạnh nhất
                 sorted_coins = sorted(results, key=lambda x: abs(x["change_pct"]), reverse=True)
-                return sorted_coins[:limit]
+                final_selection = sorted_coins[:limit]
+
+                # In log (debug)
+                print("[DEBUG] Top 50 theo volume:", [c["symbol"] for c in top_volume])
+                print("[DEBUG] Chọn cuối cùng:", [c["symbol"] for c in final_selection])
+
+                return final_selection
 
     except Exception as e:
         print(f"[ERROR] detect_trend: {e}")
