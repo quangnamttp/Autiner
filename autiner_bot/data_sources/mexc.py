@@ -1,11 +1,18 @@
+# autiner_bot/data_sources/mexc.py
 import aiohttp
 from autiner_bot.settings import S
 
+# =============================
+# Hàm fetch chung
+# =============================
 async def fetch_json(url: str):
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             return await resp.json()
 
+# =============================
+# Lấy toàn bộ tickers futures
+# =============================
 async def get_all_tickers():
     """Lấy tất cả tickers futures từ MEXC."""
     try:
@@ -15,28 +22,48 @@ async def get_all_tickers():
         print(f"[ERROR] get_all_tickers: {e}")
         return []
 
+# =============================
+# Lấy top coin mạnh nhất
+# =============================
 async def get_top_moving_coins(limit=5):
     """
-    Lấy coin futures biến động mạnh nhất.
+    Lấy coin futures biến động mạnh nhất & volume cao nhất.
+    Ưu tiên volume + % biến động tại thời điểm hiện tại.
     """
     tickers = await get_all_tickers()
     futures = [t for t in tickers if t.get("symbol", "").endswith("_USDT")]
 
+    ranked = []
     for f in futures:
         try:
             last_price = float(f.get("lastPrice", 0))
-            # Ưu tiên riseFallRate (%)
+            volume = float(f.get("volume", 0))  # volume theo USDT
             rf = float(f.get("riseFallRate", 0))
+
+            # % biến động
             change_pct = rf * 100 if abs(rf) < 10 else rf
-            f["change_pct"] = change_pct
-            f["lastPrice"] = last_price
+
+            # Chỉ số xếp hạng = |% biến động| * volume
+            score = abs(change_pct) * volume
+
+            ranked.append({
+                "symbol": f["symbol"],
+                "lastPrice": last_price,
+                "volume": volume,
+                "change_pct": change_pct,
+                "score": score
+            })
         except:
-            f["change_pct"] = 0.0
-            f["lastPrice"] = 0.0
+            continue
 
-    futures.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
-    return futures[:limit]
+    # Sắp xếp theo score giảm dần
+    ranked.sort(key=lambda x: x["score"], reverse=True)
 
+    return ranked[:limit]
+
+# =============================
+# Long/Short sentiment BTC
+# =============================
 async def get_market_sentiment():
     """Tỷ lệ Long/Short BTC."""
     try:
@@ -52,6 +79,9 @@ async def get_market_sentiment():
         print(f"[ERROR] get_market_sentiment: {e}")
     return {"long": 0.0, "short": 0.0}
 
+# =============================
+# Funding, volume, trend BTC
+# =============================
 async def get_market_funding_volume():
     """Funding, volume, xu hướng BTC."""
     try:
