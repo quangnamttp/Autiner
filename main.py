@@ -23,7 +23,7 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu.tex
 async def init_bot():
     await application.initialize()
     await application.start()
-    webhook_url = f"https://autiner.onrender.com/webhook/{S.TELEGRAM_BOT_TOKEN}"
+    webhook_url = f"https://autiner-7mgw.onrender.com/webhook/{S.TELEGRAM_BOT_TOKEN}"
     await application.bot.set_webhook(webhook_url, drop_pending_updates=True)
     print(f"[WEBHOOK] Đã set: {webhook_url}")
 
