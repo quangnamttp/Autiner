@@ -1,15 +1,17 @@
 import aiohttp
-import numpy as np
 from autiner_bot.settings import S
 
 # =============================
-# Fetch helpers
+# Fetch JSON từ API
 # =============================
 async def fetch_json(url: str):
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
+        async with session.get(url, timeout=10) as resp:
             return await resp.json()
 
+# =============================
+# Lấy tất cả tickers futures
+# =============================
 async def get_all_tickers():
     try:
         data = await fetch_json(S.MEXC_TICKER_URL)
@@ -18,126 +20,79 @@ async def get_all_tickers():
         print(f"[ERROR] get_all_tickers: {e}")
         return []
 
-async def get_klines(symbol: str, limit: int = 100):
-    try:
-        url = f"https://contract.mexc.com/api/v1/contract/kline/{symbol}?interval=Min15&limit={limit}"
-        data = await fetch_json(url)
-        return data.get("data", [])[::-1]
-    except Exception as e:
-        print(f"[ERROR] get_klines({symbol}): {e}")
-        return []
-
 # =============================
-# Indicators
+# Tính RSI (Relative Strength Index)
 # =============================
-def calc_rsi(prices, period: int = 14):
-    if len(prices) < period + 1:
-        return None
-    deltas = np.diff(prices)
-    seed = deltas[:period]
-    up = seed[seed >= 0].sum() / period
-    down = -seed[seed < 0].sum() / period
-    rs = up / down if down != 0 else 0
-    rsi = np.zeros_like(prices)
-    rsi[:period] = 50
-    for i in range(period, len(prices)):
-        delta = deltas[i - 1]
-        upval = max(delta, 0)
-        downval = -min(delta, 0)
-        up = (up * (period - 1) + upval) / period
-        down = (down * (period - 1) + downval) / period
-        rs = up / down if down != 0 else 0
-        rsi[i] = 100 - 100 / (1 + rs)
-    return rsi[-1]
-
-def calc_ema(prices, period: int = 20):
-    if len(prices) < period:
-        return None
-    weights = np.exp(np.linspace(-1., 0., period))
-    weights /= weights.sum()
-    a = np.convolve(prices, weights, mode='full')[:len(prices)]
-    return a[-1]
-
-def calc_macd(prices):
-    if len(prices) < 26:
-        return None, None
-    ema12 = calc_ema(prices, 12)
-    ema26 = calc_ema(prices, 26)
-    if ema12 is None or ema26 is None:
-        return None, None
-    macd = ema12 - ema26
-    signal = calc_ema(prices, 9)
-    return macd, signal
-
-def calc_bollinger(prices, period: int = 20, num_std: int = 2):
-    if len(prices) < period:
-        return None, None
-    sma = np.mean(prices[-period:])
-    std = np.std(prices[-period:])
-    upper = sma + num_std * std
-    lower = sma - num_std * std
-    return upper, lower
-
-# =============================
-# Analyzer
-# =============================
-async def analyze_coin(symbol: str):
-    klines = await get_klines(symbol, limit=100)
-    if not klines:
+def calculate_rsi(closes, period=14):
+    if len(closes) < period + 1:
         return None
 
-    closes = np.array([float(k[4]) for k in klines])
-    volumes = np.array([float(k[5]) for k in klines])
-    last_price = closes[-1]
+    gains, losses = [], []
+    for i in range(1, period + 1):
+        change = closes[-i] - closes[-i - 1]
+        if change > 0:
+            gains.append(change)
+        else:
+            losses.append(abs(change))
 
-    # Indicators
-    rsi = calc_rsi(closes)
-    ema20 = calc_ema(closes, 20)
-    macd, macd_signal = calc_macd(closes)
-    bb_upper, bb_lower = calc_bollinger(closes)
+    avg_gain = sum(gains) / period if gains else 0
+    avg_loss = sum(losses) / period if losses else 1e-9  # tránh chia 0
 
-    score = 0
-    reason = []
-
-    if rsi:
-        if rsi < 30: score += 2; reason.append("RSI quá bán")
-        elif rsi > 70: score -= 2; reason.append("RSI quá mua")
-
-    if ema20:
-        if last_price > ema20: score += 1; reason.append("Giá trên EMA20")
-        else: score -= 1; reason.append("Giá dưới EMA20")
-
-    if macd and macd_signal:
-        if macd > macd_signal: score += 1; reason.append("MACD bullish")
-        else: score -= 1; reason.append("MACD bearish")
-
-    if bb_upper and bb_lower:
-        if last_price > bb_upper: score -= 1; reason.append("Trên BB trên")
-        elif last_price < bb_lower: score += 1; reason.append("Dưới BB dưới")
-
-    avg_vol = np.mean(volumes[-20:])
-    if volumes[-1] > avg_vol * 1.5:
-        score += 1; reason.append("Volume tăng mạnh")
-
-    return {
-        "symbol": symbol,
-        "lastPrice": last_price,
-        "score": score,
-        "reasons": reason,
-    }
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
 # =============================
-# Top signals
+# Tính MA (Moving Average)
 # =============================
-async def get_top_signals(limit=5):
+def calculate_ma(closes, period=20):
+    if len(closes) < period:
+        return None
+    return sum(closes[-period:]) / period
+
+# =============================
+# Lấy top coin biến động + phân tích
+# =============================
+async def get_top_moving_coins(limit=5):
     tickers = await get_all_tickers()
     futures = [t for t in tickers if t.get("symbol", "").endswith("_USDT")]
 
-    results = []
+    # Chuẩn hóa dữ liệu
     for f in futures:
-        analyzed = await analyze_coin(f["symbol"])
-        if analyzed:
-            results.append(analyzed)
+        try:
+            last_price = float(f.get("lastPrice", 0))
+            rf = float(f.get("riseFallRate", 0))
+            change_pct = rf * 100 if abs(rf) < 10 else rf
 
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:limit]
+            f["lastPrice"] = last_price
+            f["change_pct"] = change_pct
+            f["volume"] = float(f.get("volume", 0))
+        except:
+            f["lastPrice"] = 0.0
+            f["change_pct"] = 0.0
+            f["volume"] = 0.0
+
+    # Lọc theo volume cao nhất + biến động mạnh
+    futures.sort(key=lambda x: (x["volume"], abs(x["change_pct"])), reverse=True)
+    top = futures[:limit]
+
+    # Gắn thêm phân tích RSI + MA
+    results = []
+    for coin in top:
+        try:
+            kl_url = S.MEXC_KLINES_URL.format(sym=coin["symbol"])
+            kl_data = await fetch_json(kl_url)
+
+            closes = [float(c[4]) for c in kl_data.get("data", [])]  # close price
+            rsi = calculate_rsi(closes)
+            ma = calculate_ma(closes)
+
+            coin["rsi"] = round(rsi, 2) if rsi else None
+            coin["ma"] = round(ma, 4) if ma else None
+        except Exception as e:
+            print(f"[WARN] RSI/MA error {coin['symbol']}: {e}")
+            coin["rsi"] = None
+            coin["ma"] = None
+
+        results.append(coin)
+
+    return results
