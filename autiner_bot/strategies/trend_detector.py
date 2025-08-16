@@ -1,4 +1,3 @@
-# autiner_bot/strategies/trend_detector.py
 import aiohttp
 import numpy as np
 from autiner_bot.settings import S
@@ -81,16 +80,21 @@ async def detect_trend(limit: int = 5):
                     ma5 = np.mean(closes[-5:]) if len(closes) >= 5 else last_price
                     ma20 = np.mean(closes[-20:]) if len(closes) >= 20 else last_price
 
+                    # Thêm cờ để sau này phân tách Scalping / Swing
+                    # (ví dụ RSI < 30 => Scalping buy, RSI > 70 => Scalping sell, còn lại Swing)
+                    trade_style = "SCALPING" if abs(rsi - 50) > 20 else "SWING"
+
                     results.append({
                         **coin,
                         "trend": trend,
-                        "rsi": rsi,
-                        "ma5": ma5,
-                        "ma20": ma20
+                        "rsi": round(rsi, 2),
+                        "ma5": round(ma5, 6),
+                        "ma20": round(ma20, 6),
+                        "trade_style": trade_style
                     })
 
                 # =============================
-                # B3. Chọn 5 coin biến động % mạnh nhất
+                # B3. Chọn N coin biến động % mạnh nhất
                 # =============================
                 sorted_coins = sorted(results, key=lambda x: abs(x["change_pct"]), reverse=True)
                 return sorted_coins[:limit]
