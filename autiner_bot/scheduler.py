@@ -1,3 +1,4 @@
+# autiner_bot/scheduler/scheduler.py
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
@@ -7,7 +8,6 @@ from autiner_bot.strategies.trend_detector import detect_trend
 from autiner_bot.strategies.signal_analyzer import analyze_coin_signal
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
-import asyncio
 import traceback
 import pytz
 from datetime import time
@@ -61,7 +61,7 @@ def create_trade_signal(coin: dict):
 # =============================
 # Báo trước 1 phút
 # =============================
-async def job_trade_signals_notice():
+async def job_trade_signals_notice(_=None):
     try:
         state = get_state()
         if not state["is_on"]:
@@ -77,7 +77,7 @@ async def job_trade_signals_notice():
 # =============================
 # Gửi tín hiệu giao dịch
 # =============================
-async def job_trade_signals():
+async def job_trade_signals(_=None):
     try:
         state = get_state()
         if not state["is_on"]:
@@ -125,9 +125,27 @@ async def job_trade_signals():
         print(traceback.format_exc())
 
 # =============================
-# Đăng ký job sáng & tối
+# Đăng ký job sáng, tối và tín hiệu
 # =============================
 def register_daily_jobs(job_queue):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
+
+    # Báo cáo sáng
     job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
+
+    # Báo cáo tối
     job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
+
+    # Lặp tín hiệu 30 phút
+    job_queue.run_repeating(
+        job_trade_signals_notice,
+        interval=1800,  # 30 phút
+        first=time(hour=6, minute=14, tzinfo=tz),
+        name="signal_notice"
+    )
+    job_queue.run_repeating(
+        job_trade_signals,
+        interval=1800,  # 30 phút
+        first=time(hour=6, minute=15, tzinfo=tz),
+        name="trade_signals"
+    )
