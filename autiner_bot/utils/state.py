@@ -1,7 +1,7 @@
 import json
 import os
 
-STATE_FILE = "bot_state.json"
+STATE_FILE = "/tmp/bot_state.json"
 
 DEFAULT_STATE = {
     "is_on": True,
