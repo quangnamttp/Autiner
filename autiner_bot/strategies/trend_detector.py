@@ -1,4 +1,5 @@
 import aiohttp
+import numpy as np
 from autiner_bot.settings import S
 from autiner_bot.strategies.signal_analyzer import calculate_rsi, fetch_klines
 
