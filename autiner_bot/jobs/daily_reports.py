@@ -11,6 +11,8 @@ from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
+
+# ====== Buổi sáng ======
 async def job_morning_message():
     """Gửi thông báo buổi sáng lúc 6h."""
     try:
@@ -19,7 +21,14 @@ async def job_morning_message():
             return
 
         now = get_vietnam_time()
-        weekday = now.strftime("%A")
+        weekday_vi = now.strftime("%A")  # tên thứ (English)
+        # dịch sang tiếng Việt
+        weekdays = {
+            "Monday": "Thứ hai", "Tuesday": "Thứ ba", "Wednesday": "Thứ tư",
+            "Thursday": "Thứ năm", "Friday": "Thứ sáu",
+            "Saturday": "Thứ bảy", "Sunday": "Chủ nhật"
+        }
+        weekday = weekdays.get(weekday_vi, weekday_vi)
         date_str = now.strftime("%d/%m/%Y")
 
         # Giá USD -> VND
@@ -29,24 +38,24 @@ async def job_morning_message():
         # Xu hướng thị trường
         sentiment = await get_market_sentiment()
 
-        # Top 5 coin tăng trưởng
+        # Top 5 coin tăng trưởng mạnh nhất
         top_coins = await get_top_moving_coins(limit=5)
 
         # Funding & Volume
         funding_info = await get_market_funding_volume()
 
+        # Nội dung tin nhắn
         msg = (
             f"📅 Hôm nay {weekday} — {date_str}\n"
-            f"🌞 06:00 — Chào buổi sáng, thị trường hôm nay có những biến động bạn theo dõi nhé\n"
-            f"“Chào buổi sáng nhé anh Trương ☀️…”\n\n"
+            f"🌞 06:00 — Chào buổi sáng anh Trương ☀️, thị trường hôm nay có nhiều biến động, mình cùng theo dõi nhé!\n\n"
             f"💵 1 USD = {usd_to_vnd} VND\n"
             f"📊 Thị trường nghiêng về: LONG {sentiment['long']:.1f}% | SHORT {sentiment['short']:.1f}%\n\n"
             f"🔥 5 đồng coin nổi bật:\n" +
-            "\n".join([f"• {c['symbol']} {c['change_pct']:.2f}%" for c in top_coins]) + "\n\n"
+            "\n".join([f"• {c['symbol'].replace('_', '/')} {c['change_pct']:+.2f}%" for c in top_coins]) + "\n\n"
             f"💹 Funding: {funding_info['funding']}\n"
             f"📈 Volume: {funding_info['volume']}\n"
             f"📌 Xu hướng: {funding_info['trend']}\n\n"
-            f"⏳ 15 phút nữa sẽ có tín hiệu, bạn cân nhắc vào lệnh nhé!"
+            f"⏳ Trong 15 phút nữa sẽ có tín hiệu. Chuẩn bị sẵn sàng để vào lệnh nhé!"
         )
 
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
@@ -55,6 +64,7 @@ async def job_morning_message():
         print(f"[ERROR] job_morning_message: {e}")
 
 
+# ====== Buổi tối ======
 async def job_evening_summary():
     """Gửi thông báo kết thúc ngày lúc 22h."""
     try:
