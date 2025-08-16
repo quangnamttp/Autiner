@@ -2,8 +2,7 @@ from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
-from autiner_bot.data_sources.mexc import get_top_signals
-from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
+from autiner_bot.data_sources.mexc import get_top_signals, get_usdt_vnd_rate
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 import asyncio
 import traceback
@@ -92,7 +91,6 @@ async def job_trade_signals():
         currency_mode = state.get("currency_mode", "USD")
         vnd_rate = None
 
-        # Lấy dữ liệu song song
         if currency_mode == "VND":
             signals_task = asyncio.create_task(get_top_signals(limit=5))
             rate_task = asyncio.create_task(get_usdt_vnd_rate())
@@ -107,7 +105,6 @@ async def job_trade_signals():
         else:
             signals = await get_top_signals(limit=5)
 
-        # Xử lý coin trong 1 batch
         for coin in signals:
             sig = create_trade_signal(coin)
 
