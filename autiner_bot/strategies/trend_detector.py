@@ -1,18 +1,20 @@
 import aiohttp
 
-COINGECKO_API = "https://api.coingecko.com/api/v3/coins/{}"
+TREND_KEYWORDS = {
+    "AI": ["AI", "GPT", "NEURAL", "BOT"],
+    "Layer2": ["L2", "ARBITRUM", "OPTIMISM", "ZKSYNC", "STARK"],
+    "DeFi": ["DEX", "SWAP", "YIELD", "LENDING"],
+    "GameFi": ["GAME", "ARENA", "PLAY", "METAVERSE"],
+    "Meme": ["INU", "DOGE", "PEPE", "MEME"]
+}
 
-async def get_coin_trend(coin_id: str):
+async def detect_trend(symbol: str, description: str = "") -> str:
     """
-    Nhận diện trend / category của coin từ Coingecko.
-    coin_id: ví dụ 'bitcoin', 'ethereum', 'arbitrum'...
+    Xác định coin thuộc trend nào dựa vào tên symbol + mô tả (nếu có).
+    Trả về: "AI", "Layer2", "DeFi", "GameFi", "Meme", hoặc "Khác".
     """
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(COINGECKO_API.format(coin_id), timeout=10) as resp:
-                data = await resp.json()
-                if "categories" in data:
-                    return data["categories"]  # list trend, ví dụ ["AI", "Layer 2"]
-    except Exception as e:
-        print(f"[ERROR] get_coin_trend {coin_id}: {e}")
-    return []
+    text = f"{symbol.upper()} {description.upper()}"
+    for trend, keywords in TREND_KEYWORDS.items():
+        if any(kw in text for kw in keywords):
+            return trend
+    return "Khác"
