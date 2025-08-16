@@ -1,28 +1,22 @@
 import aiohttp
 
 # =============================
-# Lấy tỷ giá USDT/VND
+# Lấy tỷ giá USDT/VND (chỉ từ MEXC)
 # =============================
 async def get_usdt_vnd_rate():
-    urls = [
-        "https://www.mexc.com/open/api/v2/market/ticker?symbol=USDT_VND",
-        "https://api.binance.com/api/v3/ticker/price?symbol=USDTBUSD"
-    ]
-    async with aiohttp.ClientSession() as session:
-        for url in urls:
-            try:
-                async with session.get(url, timeout=10) as resp:
-                    data = await resp.json()
-                    if "data" in data:
-                        return float(data["data"][0]["last"])
-                    if "price" in data:
-                        return float(data["price"]) * 25000  # Binance backup
-            except:
-                continue
+    url = "https://www.mexc.com/open/api/v2/market/ticker?symbol=USDT_VND"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                if "data" in data:
+                    return float(data["data"][0]["last"])
+    except:
+        pass
     return None
 
 # =============================
-# Sentiment thị trường BTC
+# Sentiment thị trường BTC (Long/Short Ratio)
 # =============================
 async def get_market_sentiment():
     try:
