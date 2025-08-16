@@ -1,10 +1,9 @@
-# autiner_bot/scheduler.py
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import get_top_moving_coins
-from autiner_bot.data_sources.exchange import get_usdt_vnd_rate
+from autiner_bot.data_sources.exchange import get_usdt_vnd_rate, get_market_sentiment
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 import asyncio
 import traceback
@@ -14,53 +13,36 @@ from datetime import time
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
 # =============================
-# Hàm format giá
+# Format giá
 # =============================
 def format_price(value: float, currency: str = "USD", vnd_rate: float | None = None) -> str:
-    """Định dạng giá hiển thị"""
     try:
-        if currency == "VND":
-            if not vnd_rate or vnd_rate <= 0:
-                return "N/A VND"
+        if currency == "VND" and vnd_rate:
             value = value * vnd_rate
-            if value >= 1000:
-                return f"{value:,.0f}".replace(",", ".") + " VND"
-            elif value >= 1:
-                return f"{value:.4f}".rstrip("0").rstrip(".") + " VND"
-            else:
-                return str(int(value)) + " VND"
-        else:  # USD
-            if value >= 1:
-                return f"{value:,.8f}".rstrip("0").rstrip(".").replace(",", ".")
-            else:
-                return f"{value:.8f}".rstrip("0").rstrip(".")
-    except Exception:
-        return f"{value} {currency}"
+            return f"{value:,.0f} VND"
+        return f"{value:.4f} {currency}"
+    except:
+        return str(value)
 
 # =============================
-# Tạo tín hiệu giao dịch
+# Tạo tín hiệu
 # =============================
-def create_trade_signal(symbol: str, last_price: float, change_pct: float):
-    direction = "LONG" if change_pct > 0 else "SHORT"
-    order_type = "MARKET" if abs(change_pct) > 2 else "LIMIT"
+def create_trade_signal(coin):
+    direction = "LONG" if coin["change_pct"] > 0 else "SHORT"
+    order_type = "MARKET"
+    tp_price = coin["lastPrice"] * (1 + (0.5/100 if direction == "LONG" else -0.5/100))
+    sl_price = coin["lastPrice"] * (1 - (0.3/100 if direction == "LONG" else -0.3/100))
 
-    tp_pct = 0.5 if direction == "LONG" else -0.5
-    sl_pct = -0.3 if direction == "LONG" else 0.3
-
-    tp_price = last_price * (1 + tp_pct / 100)
-    sl_price = last_price * (1 + sl_pct / 100)
-
-    strength = max(1, min(int(abs(change_pct) * 10), 100))
-
+    strength = min(int(coin["score"] * 10), 100)
     return {
-        "symbol": symbol,
+        "symbol": coin["symbol"],
         "side": direction,
         "orderType": order_type,
-        "entry": last_price,
+        "entry": coin["lastPrice"],
         "tp": tp_price,
         "sl": sl_price,
         "strength": strength,
-        "reason": f"Biến động {change_pct:.2f}% trong 15 phút"
+        "reason": "; ".join(coin["signals"]) or f"Biến động {coin['change_pct']:.2f}%"
     }
 
 # =============================
@@ -71,16 +53,13 @@ async def job_trade_signals_notice():
         state = get_state()
         if not state["is_on"]:
             return
-        await bot.send_message(
-            chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch!"
-        )
+        await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch!")
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
         print(traceback.format_exc())
 
 # =============================
-# Gửi tín hiệu giao dịch
+# Gửi tín hiệu
 # =============================
 async def job_trade_signals():
     try:
@@ -90,46 +69,27 @@ async def job_trade_signals():
 
         currency_mode = state.get("currency_mode", "USD")
         vnd_rate = None
-
-        # Lấy dữ liệu song song
         if currency_mode == "VND":
-            moving_task = asyncio.create_task(get_top_moving_coins(limit=5))
-            rate_task = asyncio.create_task(get_usdt_vnd_rate())
-            moving_coins, vnd_rate = await asyncio.gather(moving_task, rate_task)
+            vnd_rate = await get_usdt_vnd_rate()
 
-            if not vnd_rate or vnd_rate <= 0:
-                await bot.send_message(
-                    chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                    text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy."
-                )
-                return
-        else:
-            moving_coins = await get_top_moving_coins(limit=5)
+        moving_coins = await get_top_moving_coins(limit=5)
 
-        # Xử lý tất cả coin trong 1 batch
         for coin in moving_coins:
-            change_pct = coin.get("change_pct", 0.0)
-            last_price = coin.get("lastPrice", 0.0)
+            sig = create_trade_signal(coin)
+            entry = format_price(sig["entry"], currency_mode, vnd_rate)
+            tp = format_price(sig["tp"], currency_mode, vnd_rate)
+            sl = format_price(sig["sl"], currency_mode, vnd_rate)
 
-            sig = create_trade_signal(coin["symbol"], last_price, change_pct)
-
-            entry_price = format_price(sig["entry"], currency_mode, vnd_rate)
-            tp_price = format_price(sig["tp"], currency_mode, vnd_rate)
-            sl_price = format_price(sig["sl"], currency_mode, vnd_rate)
-
-            symbol_display = sig["symbol"].replace("_USDT", f"/{currency_mode}")
-            side_icon = "🟩 LONG" if sig["side"] == "LONG" else "🟥 SHORT"
             highlight = "⭐ " if sig["strength"] >= 70 else ""
+            side_icon = "🟩 LONG" if sig["side"] == "LONG" else "🟥 SHORT"
 
             msg = (
-                f"{highlight}📈 {symbol_display} — {side_icon}\n\n"
-                f"🔹 Kiểu vào lệnh: {sig['orderType']}\n"
-                f"💰 Entry: {entry_price}\n"
-                f"🎯 TP: {tp_price}\n"
-                f"🛡️ SL: {sl_price}\n"
+                f"{highlight}📈 {sig['symbol'].replace('_USDT', f'/{currency_mode}')}\n"
+                f"{side_icon} | {sig['orderType']}\n"
+                f"💰 Entry: {entry}\n🎯 TP: {tp}\n🛡️ SL: {sl}\n"
                 f"📊 Độ mạnh: {sig['strength']}%\n"
                 f"📌 Lý do: {sig['reason']}\n"
-                f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
+                f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
             )
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
 
@@ -138,9 +98,9 @@ async def job_trade_signals():
         print(traceback.format_exc())
 
 # =============================
-# Đăng ký job sáng & tối
+# Đăng ký job sáng/tối
 # =============================
 def register_daily_jobs(job_queue):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
-    job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
-    job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
+    job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz))
+    job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz))
