@@ -1,8 +1,9 @@
 import aiohttp
+import math
 from autiner_bot.settings import S
 
 # =============================
-# Fetch JSON từ API
+# Hàm fetch dữ liệu chung
 # =============================
 async def fetch_json(url: str):
     async with aiohttp.ClientSession() as session:
@@ -21,33 +22,39 @@ async def get_all_tickers():
         return []
 
 # =============================
-# Tính RSI (Relative Strength Index)
+# Phân tích kỹ thuật đơn giản (RSI, MA)
 # =============================
-def calculate_rsi(closes, period=14):
-    if len(closes) < period + 1:
-        return None
+async def get_technical_signal(symbol: str):
+    try:
+        url = S.MEXC_KLINES_URL.format(sym=symbol)
+        data = await fetch_json(url)
+        klines = data.get("data", [])
+        if not klines or len(klines) < 14:
+            return {"rsi": 50, "ma_signal": "NEUTRAL"}
 
-    gains, losses = [], []
-    for i in range(1, period + 1):
-        change = closes[-i] - closes[-i - 1]
-        if change > 0:
-            gains.append(change)
-        else:
-            losses.append(abs(change))
+        closes = [float(c[4]) for c in klines]  # c[4] = close
+        # RSI đơn giản
+        gains = []
+        losses = []
+        for i in range(1, 15):
+            diff = closes[-i] - closes[-i - 1]
+            if diff >= 0:
+                gains.append(diff)
+            else:
+                losses.append(abs(diff))
+        avg_gain = sum(gains) / max(1, len(gains))
+        avg_loss = sum(losses) / max(1, len(losses))
+        rsi = 100 - (100 / (1 + (avg_gain / max(1e-6, avg_loss))))
 
-    avg_gain = sum(gains) / period if gains else 0
-    avg_loss = sum(losses) / period if losses else 1e-9  # tránh chia 0
+        # MA đơn giản
+        ma_short = sum(closes[-7:]) / 7
+        ma_long = sum(closes[-25:]) / 25
+        ma_signal = "BULLISH" if ma_short > ma_long else "BEARISH"
 
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-# =============================
-# Tính MA (Moving Average)
-# =============================
-def calculate_ma(closes, period=20):
-    if len(closes) < period:
-        return None
-    return sum(closes[-period:]) / period
+        return {"rsi": round(rsi, 2), "ma_signal": ma_signal}
+    except Exception as e:
+        print(f"[ERROR] get_technical_signal {symbol}: {e}")
+        return {"rsi": 50, "ma_signal": "NEUTRAL"}
 
 # =============================
 # Lấy top coin biến động + phân tích
@@ -56,43 +63,31 @@ async def get_top_moving_coins(limit=5):
     tickers = await get_all_tickers()
     futures = [t for t in tickers if t.get("symbol", "").endswith("_USDT")]
 
-    # Chuẩn hóa dữ liệu
+    results = []
     for f in futures:
         try:
+            symbol = f["symbol"]
             last_price = float(f.get("lastPrice", 0))
             rf = float(f.get("riseFallRate", 0))
             change_pct = rf * 100 if abs(rf) < 10 else rf
 
-            f["lastPrice"] = last_price
-            f["change_pct"] = change_pct
-            f["volume"] = float(f.get("volume", 0))
+            tech = await get_technical_signal(symbol)
+
+            results.append({
+                "symbol": symbol,
+                "lastPrice": last_price,
+                "change_pct": change_pct,
+                "rsi": tech["rsi"],
+                "ma_signal": tech["ma_signal"],
+                "score": abs(change_pct) + (100 - abs(50 - tech["rsi"])) / 2
+            })
         except:
-            f["lastPrice"] = 0.0
-            f["change_pct"] = 0.0
-            f["volume"] = 0.0
+            continue
 
-    # Lọc theo volume cao nhất + biến động mạnh
-    futures.sort(key=lambda x: (x["volume"], abs(x["change_pct"])), reverse=True)
-    top = futures[:limit]
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:limit]
 
-    # Gắn thêm phân tích RSI + MA
-    results = []
-    for coin in top:
-        try:
-            kl_url = S.MEXC_KLINES_URL.format(sym=coin["symbol"])
-            kl_data = await fetch_json(kl_url)
-
-            closes = [float(c[4]) for c in kl_data.get("data", [])]  # close price
-            rsi = calculate_rsi(closes)
-            ma = calculate_ma(closes)
-
-            coin["rsi"] = round(rsi, 2) if rsi else None
-            coin["ma"] = round(ma, 4) if ma else None
-        except Exception as e:
-            print(f"[WARN] RSI/MA error {coin['symbol']}: {e}")
-            coin["rsi"] = None
-            coin["ma"] = None
-
-        results.append(coin)
-
-    return results
+# =============================
+# Giữ alias tương thích code cũ
+# =============================
+get_top_signals = get_top_moving_coins
