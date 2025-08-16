@@ -64,37 +64,32 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
         import asyncio, traceback
 
-        # Báo ngay để menu không bị treo
         await update.message.reply_text("🔄 Đang chạy test toàn bộ chức năng...", reply_markup=get_reply_menu())
 
         async def run_all_tests():
-            try:
-                print("[TEST] Chạy job_morning_message...")
-                await job_morning_message()
+            steps = [
+                ("job_morning_message", job_morning_message),
+                ("job_trade_signals_notice", job_trade_signals_notice),
+                ("job_trade_signals", job_trade_signals),
+                ("job_evening_summary", job_evening_summary),
+            ]
 
-                print("[TEST] Chạy job_trade_signals_notice...")
-                await job_trade_signals_notice()
+            for name, func in steps:
+                try:
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"▶️ Đang chạy {name}...")
+                    await func()
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"✅ {name} hoàn tất.")
+                except Exception as e:
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=f"⚠️ Lỗi khi chạy {name}!\n\nChi tiết: {e}"
+                    )
+                    print(f"[TEST ERROR] {name}: {e}")
+                    print(traceback.format_exc())
+                    return  # dừng test ngay khi lỗi
 
-                print("[TEST] Chạy job_trade_signals...")
-                await job_trade_signals()
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="🎉 Tất cả job đã chạy thành công!")
 
-                print("[TEST] Chạy job_evening_summary...")
-                await job_evening_summary()
-
-                print("[TEST] Hoàn tất tất cả job!")
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text="✅ Test toàn bộ chức năng đã chạy xong!"
-                )
-            except Exception as e:
-                print(f"[TEST ERROR] {e}")
-                print(traceback.format_exc())
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text="⚠️ Test lỗi, xem log console!"
-                )
-
-        # Chạy job ở background
         asyncio.create_task(run_all_tests())
 
     else:
