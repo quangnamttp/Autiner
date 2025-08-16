@@ -1,22 +1,22 @@
 import aiohttp
+from autiner_bot.settings import S
 
 # =============================
-# Lấy tỷ giá USDT/VND (chỉ từ MEXC)
+# Lấy tỷ giá USDT/VND từ MEXC
 # =============================
 async def get_usdt_vnd_rate():
-    url = "https://www.mexc.com/open/api/v2/market/ticker?symbol=USDT_VND"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
+            async with session.get(S.MEXC_TICKER_VNDC_URL, timeout=10) as resp:
                 data = await resp.json()
                 if "data" in data:
                     return float(data["data"][0]["last"])
-    except:
-        pass
+    except Exception as e:
+        print(f"[ERROR] get_usdt_vnd_rate: {e}")
     return None
 
 # =============================
-# Sentiment thị trường BTC (Long/Short Ratio)
+# Sentiment thị trường BTC
 # =============================
 async def get_market_sentiment():
     try:
@@ -30,6 +30,6 @@ async def get_market_sentiment():
                         "long": float(latest.get("longAccount", 0)),
                         "short": float(latest.get("shortAccount", 0))
                     }
-    except:
-        pass
+    except Exception as e:
+        print(f"[ERROR] get_market_sentiment: {e}")
     return {"long": 0.0, "short": 0.0}
