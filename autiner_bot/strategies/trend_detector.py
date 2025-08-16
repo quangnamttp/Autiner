@@ -1,38 +1,18 @@
-# autiner_bot/strategies/trend_detector.py
+import aiohttp
 
-"""
-Module nhận diện trend & loại bỏ coin rác.
-"""
+COINGECKO_API = "https://api.coingecko.com/api/v3/coins/{}"
 
-# Mapping các trend phổ biến (tạm demo, có thể bổ sung thêm)
-TREND_KEYWORDS = {
-    "AI": ["AI", "FET", "AGIX", "RNDR", "ARKM"],
-    "Layer2": ["ARB", "OP", "MATIC", "STRK", "ZKS"],
-    "Meme": ["DOGE", "SHIB", "PEPE", "FLOKI"],
-    "DeFi": ["UNI", "AAVE", "CAKE", "CRV"],
-    "GameFi": ["AXS", "SAND", "MANA", "GALA"]
-}
-
-def detect_trend(symbol: str) -> str:
+async def get_coin_trend(coin_id: str):
     """
-    Kiểm tra coin thuộc trend nào dựa trên symbol.
+    Nhận diện trend / category của coin từ Coingecko.
+    coin_id: ví dụ 'bitcoin', 'ethereum', 'arbitrum'...
     """
-    for trend, keywords in TREND_KEYWORDS.items():
-        for k in keywords:
-            if k in symbol.upper():
-                return trend
-    return "Unknown"
-
-def filter_coins(coins: list) -> list:
-    """
-    Lọc coin rác & chỉ giữ coin có trend mạnh.
-    Input: danh sách coin [{symbol, lastPrice, change_pct, ...}]
-    Output: danh sách coin đã gắn trend
-    """
-    filtered = []
-    for c in coins:
-        trend = detect_trend(c["symbol"])
-        if trend != "Unknown":
-            c["trend"] = trend
-            filtered.append(c)
-    return filtered
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(COINGECKO_API.format(coin_id), timeout=10) as resp:
+                data = await resp.json()
+                if "categories" in data:
+                    return data["categories"]  # list trend, ví dụ ["AI", "Layer 2"]
+    except Exception as e:
+        print(f"[ERROR] get_coin_trend {coin_id}: {e}")
+    return []
