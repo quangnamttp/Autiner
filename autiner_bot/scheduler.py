@@ -1,4 +1,3 @@
-# autiner_bot/scheduler.py
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
@@ -78,7 +77,8 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
         tp_price = format_price(signal["tp"], currency_mode, vnd_rate)
         sl_price = format_price(signal["sl"], currency_mode, vnd_rate)
 
-        symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.lower()}")
+        # ✅ Fix 1: hiển thị /VND và /USD viết hoa
+        symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
 
         # Đánh dấu tín hiệu
@@ -89,17 +89,18 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
         else:
             label = ""
 
+        # ✅ Fix 2: bỏ khoảng trắng thừa + Fix 3: giờ ngày luôn ở cuối
         msg = (
-            f"{label}\n\n"
+            f"{label}\n"
             f"📈 {symbol_display}\n"
             f"{side_icon}\n"
             f"📌 Chế độ: {mode.upper()}\n"
-            f"📑 Loại lệnh: {signal['orderType']}\n\n"
+            f"📑 Loại lệnh: {signal['orderType']}\n"
             f"💰 Entry: {entry_price} {currency_mode}\n"
             f"🎯 TP: {tp_price} {currency_mode}\n"
-            f"🛡️ SL: {sl_price} {currency_mode}\n\n"
+            f"🛡️ SL: {sl_price} {currency_mode}\n"
             f"📊 Độ mạnh: {signal['strength']}%\n"
-            f"📌 Lý do:\n{signal['reason']}\n\n"
+            f"📌 Lý do:\n{signal['reason']}\n"
             f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
         )
         return msg
