@@ -180,22 +180,24 @@ async def fetch_klines(symbol: str, limit: int = 100):
 
 
 # =============================
-# Phân tích tín hiệu nâng cấp
+# Phân tích tín hiệu nâng cấp V2
 # =============================
-async def analyze_coin_signal(coin: dict) -> dict:
+async def analyze_coin_signal_v2(coin: dict) -> dict:
     """
-    Phân tích kỹ thuật:
+    Phân tích nâng cấp:
     - RSI (14 kỳ, dữ liệu thực)
     - MA5, MA20
+    - ATR để đặt TP/SL động
     - Entry linh hoạt (Market/Limit)
-    - TP/SL động theo biến động
+    - Strength dựa vào RSI + biến động + volume
     """
     symbol = coin["symbol"]
     last_price = coin["lastPrice"]
     change_pct = coin["change_pct"]
+    volume = coin.get("volume", 0)
 
     # --- Lấy dữ liệu nến ---
-    closes = await fetch_klines(symbol, limit=50)
+    closes = await fetch_klines(symbol, limit=100)
     if not closes:
         closes = [last_price] * 20  # fallback nếu API lỗi
 
@@ -213,7 +215,7 @@ async def analyze_coin_signal(coin: dict) -> dict:
     ma20 = np.mean(closes[-20:]) if len(closes) >= 20 else last_price
     ma_signal = "BUY" if ma5 > ma20 else "SELL"
 
-    # --- Xác định hướng ---
+    # --- Xác định hướng (side) ---
     if rsi < 30 or (ma5 > ma20 and change_pct > 0):
         side = "LONG"
     elif rsi > 70 or (ma5 < ma20 and change_pct < 0):
@@ -225,41 +227,51 @@ async def analyze_coin_signal(coin: dict) -> dict:
     if abs(change_pct) > 2:  # biến động mạnh -> Market
         order_type = "MARKET"
         entry_price = last_price
-    else:  # biến động vừa/nhỏ -> Limit
+    else:  # biến động nhỏ/vừa -> Limit
         order_type = "LIMIT"
-        if side == "LONG":
-            entry_price = min(last_price, ma5)  # mua rẻ hơn ở MA5
-        else:  # SHORT
-            entry_price = max(last_price, ma5)  # bán cao hơn ở MA5
+        entry_price = ma5 if side == "LONG" else ma5
 
-    # --- TP/SL động ---
-    base_volatility = max(1.0, abs(change_pct))
-    tp_pct = base_volatility * 1.0
-    sl_pct = 0.5
+    # --- ATR tính volatility ---
+    highs = np.array(closes[-20:]) * (1 + 0.002)  # giả lập high ~ close ± 0.2%
+    lows = np.array(closes[-20:]) * (1 - 0.002)   # giả lập low ~ close ± 0.2%
+    tr = np.maximum(highs - lows, np.abs(highs - closes[-2]), np.abs(lows - closes[-2]))
+    atr = np.mean(tr) if len(tr) > 0 else last_price * 0.005  # fallback ATR 0.5%
 
-    if side == "SHORT":
-        tp_pct = -tp_pct  # TP âm cho lệnh SHORT
+    # --- TP/SL động theo ATR ---
+    if side == "LONG":
+        tp_price = entry_price + 2 * atr
+        sl_price = entry_price - 1 * atr
+    else:
+        tp_price = entry_price - 2 * atr
+        sl_price = entry_price + 1 * atr
 
-    tp_price = entry_price * (1 + tp_pct / 100)
-    sl_price = entry_price * (1 + sl_pct / 100)
+    tp_pct = (tp_price / entry_price - 1) * 100
+    sl_pct = (sl_price / entry_price - 1) * 100
 
     # --- Strength ---
-    strength = min(100, max(1, int(abs(change_pct) * 10)))
+    strength = 50
+    if abs(change_pct) > 3:
+        strength += 20
     if side == "LONG" and rsi < 25:
-        strength = min(100, strength + 30)
+        strength += 15
     if side == "SHORT" and rsi > 75:
-        strength = min(100, strength + 30)
+        strength += 15
+    if volume > 10_000_000:  # volume cao
+        strength += 10
+
+    strength = min(100, max(1, strength))
 
     return {
         "symbol": symbol,
         "direction": side,
         "orderType": order_type,
-        "entry": entry_price,
-        "tp": tp_price,
-        "sl": sl_price,
-        "tp_pct": tp_pct,
-        "sl_pct": sl_pct,
+        "entry": round(entry_price, 4),
+        "tp": round(tp_price, 4),
+        "sl": round(sl_price, 4),
+        "tp_pct": round(tp_pct, 2),
+        "sl_pct": round(sl_pct, 2),
         "strength": strength,
         "reason": f"RSI {rsi_signal} ({rsi:.1f}) | MA {ma_signal} "
-                  f"(MA5={ma5:.4f}, MA20={ma20:.4f}) | Biến động {change_pct:.2f}%"
+                  f"(MA5={ma5:.4f}, MA20={ma20:.4f}) | ATR={atr:.4f} "
+                  f"| Biến động {change_pct:.2f}% | Volume {volume}"
     }
