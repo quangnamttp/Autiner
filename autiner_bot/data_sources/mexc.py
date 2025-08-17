@@ -97,7 +97,7 @@ async def get_top_signals(limit: int = 10):
                         if not c["symbol"].endswith("_USDT"):
                             continue
                         volume = float(c.get("volume", 0))
-                        if volume < 1_000_000:  # lọc coin rác
+                        if volume < 100_000:  # lọc coin rác
                             continue
 
                         change_pct = float(c.get("riseFallRate", 0))
