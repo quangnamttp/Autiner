@@ -11,6 +11,17 @@ import traceback
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
+# Bảng dịch ngày sang tiếng Việt
+VIETNAMESE_DAYS = {
+    "Monday": "Thứ Hai",
+    "Tuesday": "Thứ Ba",
+    "Wednesday": "Thứ Tư",
+    "Thursday": "Thứ Năm",
+    "Friday": "Thứ Sáu",
+    "Saturday": "Thứ Bảy",
+    "Sunday": "Chủ Nhật",
+}
+
 
 # =============================
 # Hàm lấy tổng quan thị trường
@@ -65,7 +76,10 @@ async def job_morning_message(_=None):
         vnd_rate = await get_usdt_vnd_rate()
         market = await get_market_overview()
 
-        today = get_vietnam_time().strftime("%A, %d/%m/%Y")
+        dt = get_vietnam_time()
+        weekday_en = dt.strftime("%A")
+        weekday_vi = VIETNAMESE_DAYS.get(weekday_en, weekday_en)
+        today = f"{weekday_vi}, {dt.strftime('%d/%m/%Y')}"
 
         msg = (
             f"📅 Hôm nay {today}\n"
@@ -99,7 +113,10 @@ async def job_evening_summary(_=None):
         vnd_rate = await get_usdt_vnd_rate()
         market = await get_market_overview()
 
-        today = get_vietnam_time().strftime("%A, %d/%m/%Y")
+        dt = get_vietnam_time()
+        weekday_en = dt.strftime("%A")
+        weekday_vi = VIETNAMESE_DAYS.get(weekday_en, weekday_en)
+        today = f"{weekday_vi}, {dt.strftime('%d/%m/%Y')}"
 
         msg = (
             f"📅 Hôm nay {today}\n"
