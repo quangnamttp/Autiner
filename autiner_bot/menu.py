@@ -11,8 +11,11 @@ from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summ
 def get_reply_menu():
     s = state.get_state()
 
+    # Auto nút bấm
     auto_btn = "🟢 Auto ON" if not s["is_on"] else "🔴 Auto OFF"
-    currency_btn = "💴 MEXC VND" if s["currency_mode"] == "VND" else "💵 MEXC USD"
+
+    # Hiển thị nút chuyển đổi NGƯỢC lại với trạng thái hiện tại
+    currency_btn = "💵 MEXC USD" if s["currency_mode"] == "VND" else "💴 MEXC VND"
 
     keyboard = [
         ["🔍 Trạng thái", auto_btn],
@@ -48,7 +51,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Chuyển đổi đơn vị
     elif text in ["💴 MEXC VND", "💵 MEXC USD"]:
-        new_mode = "USD" if state.get_state()["currency_mode"] == "VND" else "VND"
+        if text == "💴 MEXC VND":
+            new_mode = "VND"
+        else:
+            new_mode = "USD"
+
         state.set_currency_mode(new_mode)
         await update.message.reply_text(
             f"💱 Đã chuyển đơn vị sang: {new_mode}",
