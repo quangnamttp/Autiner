@@ -1,10 +1,10 @@
-# autiner_bot/scheduler/scheduler.py
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import get_usdt_vnd_rate
-from autiner_bot.strategies.trend_detector import detect_trend
+# đổi detect_trend -> get_top20_futures
+from autiner_bot.strategies.trend_detector import get_top20_futures
 from autiner_bot.strategies.signal_analyzer import analyze_coin_signal
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -13,28 +13,6 @@ import pytz
 from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
-
-
-# =============================
-# Hàm format giá
-# =============================
-def format_price(value: float, currency: str = "USD", vnd_rate: float | None = None) -> str:
-    try:
-        if currency == "VND":
-            if not vnd_rate or vnd_rate <= 0:
-                return "N/A VND"
-            value = value * vnd_rate
-            if value >= 1000:
-                return f"{value:,.0f}".replace(",", ".")
-            else:
-                return f"{value:.6f}".rstrip("0").rstrip(".")
-        else:  # USD
-            if value >= 1:
-                return f"{value:,.2f}"
-            else:
-                return f"{value:.6f}".rstrip("0").rstrip(".")
-    except Exception:
-        return str(value)
 
 
 # =============================
@@ -52,13 +30,11 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
         highlight = "⭐" if signal["strength"] >= 70 else ""
 
-        trend_name = coin.get("trend", "Khác")
         trade_style = mode.upper()
 
         msg = (
             f"{highlight}📈 {symbol_display}\n"
             f"{side_icon} - {trade_style}\n"
-            f"🔹 Trend: {trend_name}\n"
             f"🔹 Kiểu vào lệnh: {signal['orderType'].upper()}\n"
             f"💰 Entry: {entry_price} {currency_mode}\n"
             f"🎯 TP: {tp_price} {currency_mode}\n"
@@ -72,23 +48,6 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
         print(f"[ERROR] create_trade_signal: {e}")
         print(traceback.format_exc())
         return "⚠️ Không tạo được tín hiệu cho coin này."
-
-
-# =============================
-# Báo trước 1 phút
-# =============================
-async def job_trade_signals_notice(_=None):
-    try:
-        state = get_state()
-        if not state["is_on"]:
-            return
-        await bot.send_message(
-            chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch!"
-        )
-    except Exception as e:
-        print(f"[ERROR] job_trade_signals_notice: {e}")
-        print(traceback.format_exc())
 
 
 # =============================
@@ -111,10 +70,10 @@ async def job_trade_signals(_=None):
                 )
                 return
 
-        coins = await detect_trend(limit=5)
+        # dùng hàm mới thay detect_trend
+        coins = await get_top20_futures(limit=5)
 
-        # Debug log
-        print(f"[DEBUG] detect_trend result: {len(coins)} coins")
+        print(f"[DEBUG] get_top20_futures result: {len(coins)} coins")
         for c in coins:
             print(f" -> {c['symbol']} | vol={c['volume']} | change={c['change_pct']}")
 
@@ -138,30 +97,3 @@ async def job_trade_signals(_=None):
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
-
-
-# =============================
-# Đăng ký job sáng, tối và tín hiệu
-# =============================
-def register_daily_jobs(job_queue):
-    tz = pytz.timezone("Asia/Ho_Chi_Minh")
-
-    # Báo cáo sáng
-    job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
-
-    # Báo cáo tối
-    job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
-
-    # Lặp tín hiệu 30 phút (06:15 -> 21:45)
-    job_queue.run_repeating(
-        job_trade_signals_notice,
-        interval=1800,    # 30 phút
-        first=time(hour=6, minute=14, tzinfo=tz),
-        name="signal_notice"
-    )
-    job_queue.run_repeating(
-        job_trade_signals,
-        interval=1800,    # 30 phút
-        first=time(hour=6, minute=15, tzinfo=tz),
-        name="trade_signals"
-    )
