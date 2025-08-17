@@ -5,7 +5,6 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top20_futures,
-    get_market_funding_volume,   # ✅ thay thế get_funding_rate
 )
 
 import traceback
@@ -24,16 +23,9 @@ async def get_market_overview():
                 "long": 50.0,
                 "short": 50.0,
                 "trend": "Không xác định",
-                "funding": "N/A",
-                "volume": "N/A",
                 "top5": []
             }
 
-        # Tính volume
-        total_volume = sum([c.get("volume", 0) for c in coins])
-        total_volume_bil = total_volume / 1e9  # đổi sang tỷ USD
-
-        # Tính long/short giả lập (dựa trên thay đổi %)
         ups = [c for c in coins if c.get("change_pct", 0) > 0]
         downs = [c for c in coins if c.get("change_pct", 0) < 0]
 
@@ -44,22 +36,15 @@ async def get_market_overview():
             long_pct = round(len(ups) / total * 100, 1)
             short_pct = round(len(downs) / total * 100, 1)
 
-        # Xu hướng chung = tổng % thay đổi giá
         avg_change = sum([c.get("change_pct", 0) for c in coins]) / len(coins)
         trend = "📈 Tăng" if avg_change > 0 else "📉 Giảm"
 
-        # Funding + Volume trung bình từ toàn thị trường
-        funding_data = await get_market_funding_volume()
-
-        # Top 5 coin nổi bật theo % biến động
         top5 = sorted(coins, key=lambda x: abs(x.get("change_pct", 0)), reverse=True)[:5]
 
         return {
             "long": long_pct,
             "short": short_pct,
             "trend": trend,
-            "funding": funding_data["funding"],
-            "volume": funding_data["volume"],
             "top5": top5
         }
     except Exception as e:
@@ -87,14 +72,12 @@ async def job_morning_message(_=None):
             f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\n\n"
             f"💵 1 USD = {vnd_rate:,.0f} VND\n"
             f"📊 Thị trường: 🟢 LONG {market['long']}% | 🔴 SHORT {market['short']}%\n"
-            f"📌 Xu hướng chung: {market['trend']}\n"
-            f"💹 Funding TB: {market['funding']}\n"
-            f"📈 Tổng Volume: {market['volume']}\n\n"
+            f"📌 Xu hướng chung: {market['trend']}\n\n"
             f"🔥 Top 5 đồng coin nổi bật:\n"
         )
 
         for c in market["top5"]:
-            msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
+            msg += f" • {c['symbol'].replace('_USDT','/USDT')} |  {c['change_pct']:+.2f}%\n"
 
         msg += "\n⏳ Trong 15 phút nữa sẽ có tín hiệu. Chuẩn bị sẵn sàng để vào lệnh nhé! 🚀"
 
@@ -123,14 +106,12 @@ async def job_evening_summary(_=None):
             f"🌙 22:00 — Tổng kết phiên giao dịch 🌙\n\n"
             f"💵 1 USD = {vnd_rate:,.0f} VND\n"
             f"📊 Thị trường: 🟢 LONG {market['long']}% | 🔴 SHORT {market['short']}%\n"
-            f"📌 Xu hướng chung: {market['trend']}\n"
-            f"💹 Funding TB: {market['funding']}\n"
-            f"📈 Tổng Volume: {market['volume']}\n\n"
+            f"📌 Xu hướng chung: {market['trend']}\n\n"
             f"🔥 Top 5 đồng coin nổi bật:\n"
         )
 
         for c in market["top5"]:
-            msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
+            msg += f" • {c['symbol'].replace('_USDT','/USDT')} |  {c['change_pct']:+.2f}%\n"
 
         msg += "\n📊 Hiệu suất lệnh sẽ được tổng hợp trong bản nâng cấp sau. 🚀"
 
