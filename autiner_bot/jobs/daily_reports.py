@@ -1,4 +1,3 @@
-# autiner_bot/jobs/daily_reports.py
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
@@ -12,7 +11,10 @@ from autiner_bot.data_sources.mexc import (
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
-# ===== BUỔI SÁNG =====
+
+# =========================
+# BUỔI SÁNG
+# =========================
 async def job_morning_message():
     """Gửi thông báo buổi sáng lúc 6h."""
     try:
@@ -24,7 +26,7 @@ async def job_morning_message():
         weekday = now.strftime("%A")
         date_str = now.strftime("%d/%m/%Y")
 
-        # Chuyển sang tiếng Việt
+        # Dịch sang tiếng Việt
         weekday_vi = {
             "Monday": "Thứ Hai",
             "Tuesday": "Thứ Ba",
@@ -35,23 +37,21 @@ async def job_morning_message():
             "Sunday": "Chủ Nhật"
         }.get(weekday, weekday)
 
-        # Giá USD -> VND
+        # Tỷ giá USD/VND
         vnd_rate = await get_usdt_vnd_rate()
         usd_to_vnd = f"{vnd_rate:,.0f}".replace(",", ".") if vnd_rate else "N/A"
 
-        # Xu hướng thị trường
+        # Sentiment thị trường (toàn thị trường, volume)
         sentiment = await get_market_sentiment()
 
         # Funding & Volume
         funding_info = await get_market_funding_volume()
 
-        # Top 5 coin nổi bật
-        top_coins = await get_top20_futures(limit=5)
-
-        # Tính xu hướng chung
+        # Xu hướng chung
         trend = "📈 Tăng" if sentiment["long"] >= sentiment["short"] else "📉 Giảm"
 
-        # Danh sách coin
+        # Top 5 coin nổi bật
+        top_coins = await get_top20_futures(limit=5)
         coin_lines = []
         for c in top_coins:
             symbol = c['symbol'].replace('_USDT', '/USDT')
@@ -59,7 +59,7 @@ async def job_morning_message():
             coin_lines.append(f" • {symbol:<8} | {change_pct:>7}")
         coins_table = "\n".join(coin_lines)
 
-        # Tin nhắn cuối
+        # Soạn tin nhắn
         msg = (
             f"📅 Hôm nay {weekday_vi}, {date_str}\n"
             f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\n\n"
@@ -78,7 +78,9 @@ async def job_morning_message():
         print(f"[ERROR] job_morning_message: {e}")
 
 
-# ===== BUỔI TỐI =====
+# =========================
+# BUỔI TỐI
+# =========================
 async def job_evening_summary():
     """Gửi thông báo kết thúc ngày lúc 22h."""
     try:
@@ -90,7 +92,7 @@ async def job_evening_summary():
         weekday = now.strftime("%A")
         date_str = now.strftime("%d/%m/%Y")
 
-        # Chuyển sang tiếng Việt
+        # Dịch sang tiếng Việt
         weekday_vi = {
             "Monday": "Thứ Hai",
             "Tuesday": "Thứ Ba",
@@ -101,11 +103,12 @@ async def job_evening_summary():
             "Sunday": "Chủ Nhật"
         }.get(weekday, weekday)
 
-        # Xu hướng thị trường để tổng kết
+        # Sentiment & Funding
         sentiment = await get_market_sentiment()
         funding_info = await get_market_funding_volume()
         trend = "📈 Tăng" if sentiment["long"] >= sentiment["short"] else "📉 Giảm"
 
+        # Soạn tin nhắn
         msg = (
             f"🌒 22:00 — {weekday_vi}, {date_str}\n\n"
             f"📌 Kết thúc ngày giao dịch hôm nay.\n"
