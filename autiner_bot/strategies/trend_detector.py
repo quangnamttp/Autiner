@@ -14,7 +14,6 @@ TREND_KEYWORDS = {
     "Meme": ["INU", "DOGE", "SHIB", "PEPE", "FLOKI", "MEME", "BONK"]
 }
 
-
 # =============================
 # Hàm lọc coin theo trend & volume
 # =============================
@@ -22,7 +21,7 @@ async def detect_trend(limit: int = 5):
     """
     Lọc coin theo trend mạnh:
     1. Lấy dữ liệu MEXC ticker.
-    2. Lọc coin có volume cao nhất (top 50) để tránh coin rác.
+    2. Lọc coin USDT + volume cao.
     3. Nhận diện trend dựa vào symbol.
     4. Tính RSI & MA để phân tích.
     5. Chọn ra N coin biến động mạnh nhất.
@@ -30,35 +29,38 @@ async def detect_trend(limit: int = 5):
     try:
         url = S.MEXC_TICKER_URL
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
+            async with session.get(url, timeout=15) as resp:
                 data = await resp.json()
-                if not data.get("success"):
+
+                if "data" not in data:
+                    print("[ERROR] detect_trend - API không trả về field 'data'")
                     return []
 
                 # =============================
                 # B1. Gom toàn bộ coin USDT
                 # =============================
                 candidates = []
-                for c in data.get("data", []):
-                    if not c["symbol"].endswith("_USDT"):
+                for c in data["data"]:
+                    if not str(c.get("symbol", "")).endswith("_USDT"):
                         continue
-                    volume = float(c.get("volume", 0))
+                    volume = float(c.get("volume", 0) or 0)
                     if volume <= 0:
                         continue
                     candidates.append({
                         "symbol": c["symbol"],
-                        "lastPrice": float(c.get("lastPrice", 0)),
+                        "lastPrice": float(c.get("lastPrice", 0) or 0),
                         "volume": volume,
-                        "change_pct": float(c.get("riseFallRate", 0)),
+                        "change_pct": float(c.get("riseFallRate", 0) or 0),
                     })
 
                 if not candidates:
+                    print("[WARN] Không có coin USDT nào hợp lệ")
                     return []
 
                 # =============================
-                # B2. Giữ lại top 50 coin volume cao nhất
+                # B2. Giữ lại top 100 coin volume cao nhất
                 # =============================
-                top_volume = sorted(candidates, key=lambda x: x["volume"], reverse=True)[:50]
+                top_volume = sorted(candidates, key=lambda x: x["volume"], reverse=True)[:100]
 
                 results = []
                 for coin in top_volume:
@@ -74,14 +76,16 @@ async def detect_trend(limit: int = 5):
                     # Lấy dữ liệu kỹ thuật (RSI & MA)
                     closes = await fetch_klines(coin["symbol"], limit=30)
                     if not closes:
-                        closes = [last_price] * 20
+                        closes = [last_price] * 20  # fallback
 
-                    rsi = calculate_rsi(closes, 14)
+                    try:
+                        rsi = calculate_rsi(closes, 14)
+                    except Exception:
+                        rsi = 50.0
+
                     ma5 = np.mean(closes[-5:]) if len(closes) >= 5 else last_price
                     ma20 = np.mean(closes[-20:]) if len(closes) >= 20 else last_price
 
-                    # Thêm cờ để sau này phân tách Scalping / Swing
-                    # (ví dụ RSI < 30 => Scalping buy, RSI > 70 => Scalping sell, còn lại Swing)
                     trade_style = "SCALPING" if abs(rsi - 50) > 20 else "SWING"
 
                     results.append({
@@ -94,9 +98,10 @@ async def detect_trend(limit: int = 5):
                     })
 
                 # =============================
-                # B3. Chọn N coin biến động % mạnh nhất
+                # B3. Chọn N coin biến động mạnh nhất
                 # =============================
                 sorted_coins = sorted(results, key=lambda x: abs(x["change_pct"]), reverse=True)
+
                 return sorted_coins[:limit]
 
     except Exception as e:
