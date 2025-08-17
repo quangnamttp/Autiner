@@ -7,7 +7,7 @@ from autiner_bot.data_sources.mexc import (
     get_market_sentiment,
     get_market_funding_volume,
     get_usdt_vnd_rate,
-    get_top20_futures,   # lấy trực tiếp từ mexc.py
+    get_top20_futures,
 )
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
@@ -42,42 +42,37 @@ async def job_morning_message():
         # Xu hướng thị trường
         sentiment = await get_market_sentiment()
 
-        # Top 5 coin nổi bật
-        top_coins = await get_top20_futures(limit=5)
-
         # Funding & Volume
         funding_info = await get_market_funding_volume()
 
-        # Thông điệp
-        if sentiment["short"] > 60 or sum(1 for c in top_coins if c["change_pct"] < 0) >= 3:
-            greeting = f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\nThị trường hôm nay có dấu hiệu **giảm mạnh**, hãy cẩn trọng nhé!"
-        else:
-            greeting = f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\nThị trường hôm nay có nhiều **biến động**, mình cùng theo dõi nhé!"
+        # Top 5 coin nổi bật
+        top_coins = await get_top20_futures(limit=5)
+
+        # Tính xu hướng chung
+        trend = "📈 Tăng" if sentiment["long"] >= sentiment["short"] else "📉 Giảm"
 
         # Danh sách coin
         coin_lines = []
         for c in top_coins:
             symbol = c['symbol'].replace('_USDT', '/USDT')
             change_pct = f"{c['change_pct']:+.2f}%"
-            coin_lines.append(f"{symbol:<10} | {change_pct:>7}")
-
+            coin_lines.append(f" • {symbol:<8} | {change_pct:>7}")
         coins_table = "\n".join(coin_lines)
 
         # Tin nhắn cuối
         msg = (
             f"📅 Hôm nay {weekday_vi}, {date_str}\n"
-            f"{greeting}\n\n"
+            f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\n\n"
             f"💵 1 USD = {usd_to_vnd} VND\n"
-            f"📊 Thị trường: LONG {sentiment['long']:.1f}% | SHORT {sentiment['short']:.1f}%\n\n"
-            f"🔥 Top 5 đồng coin nổi bật:\n"
-            f"```\n{coins_table}\n```\n"
+            f"📊 Thị trường: 🟢 LONG {sentiment['long']:.1f}% | 🔴 SHORT {sentiment['short']:.1f}%\n"
+            f"📌 Xu hướng chung: {trend}\n"
             f"💹 Funding: {funding_info['funding']}\n"
-            f"📈 Volume: {funding_info['volume']}\n"
-            f"📌 Xu hướng: {funding_info['trend']}\n\n"
-            f"⏳ Trong 15 phút nữa sẽ có tín hiệu. Chuẩn bị sẵn sàng để vào lệnh nhé!"
+            f"📈 Volume: {funding_info['volume']}\n\n"
+            f"🔥 Top 5 đồng coin nổi bật:\n{coins_table}\n\n"
+            f"⏳ Trong 15 phút nữa sẽ có tín hiệu. Chuẩn bị sẵn sàng để vào lệnh nhé! 🚀"
         )
 
-        await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg, parse_mode="Markdown")
+        await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
 
     except Exception as e:
         print(f"[ERROR] job_morning_message: {e}")
@@ -92,12 +87,33 @@ async def job_evening_summary():
             return
 
         now = get_vietnam_time()
+        weekday = now.strftime("%A")
         date_str = now.strftime("%d/%m/%Y")
 
+        # Chuyển sang tiếng Việt
+        weekday_vi = {
+            "Monday": "Thứ Hai",
+            "Tuesday": "Thứ Ba",
+            "Wednesday": "Thứ Tư",
+            "Thursday": "Thứ Năm",
+            "Friday": "Thứ Sáu",
+            "Saturday": "Thứ Bảy",
+            "Sunday": "Chủ Nhật"
+        }.get(weekday, weekday)
+
+        # Xu hướng thị trường để tổng kết
+        sentiment = await get_market_sentiment()
+        funding_info = await get_market_funding_volume()
+        trend = "📈 Tăng" if sentiment["long"] >= sentiment["short"] else "📉 Giảm"
+
         msg = (
-            f"🌒 22:00 — {date_str}\n\n"
-            f"📌 Kết thúc ngày giao dịch, hãy quản lý tín hiệu thật tốt.\n"
-            f"🔒 Chốt lệnh trước khi ngủ để tránh biến động về đêm.\n\n"
+            f"🌒 22:00 — {weekday_vi}, {date_str}\n\n"
+            f"📌 Kết thúc ngày giao dịch hôm nay.\n"
+            f"📊 Hiệu suất: 🟢 LONG {sentiment['long']:.1f}% | 🔴 SHORT {sentiment['short']:.1f}%\n"
+            f"📌 Xu hướng chung: {trend}\n"
+            f"💹 Funding: {funding_info['funding']}\n"
+            f"📈 Volume: {funding_info['volume']}\n\n"
+            f"🔒 Hãy nhớ quản lý vốn và chốt lệnh để tránh biến động ban đêm.\n\n"
             f"🌙 Chúc anh Trương ngủ ngon 🤗"
         )
 
