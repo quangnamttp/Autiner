@@ -2,14 +2,21 @@ from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
-from autiner_bot.data_sources.mexc import get_usdt_vnd_rate, detect_trend, analyze_coin_signal_v2
-from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
+from autiner_bot.data_sources.mexc import (
+    get_usdt_vnd_rate,
+    analyze_coin_signal_v2,
+    get_top20_futures,
+)
 
 import traceback
 import pytz
+import random
 from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
+
+# Lưu lần chọn trước đó để tránh trùng
+_last_selected = []
 
 
 # =============================
@@ -22,10 +29,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
                 return "N/A VND"
             value = value * vnd_rate
 
-            # Giữ 10 số thập phân, bỏ số 0 thừa
             s = f"{value:.10f}".rstrip("0").rstrip(".")
-
-            # Thêm dấu chấm phân tách nghìn cho phần nguyên
             if "." in s:
                 int_part, dec_part = s.split(".")
                 int_part = f"{int(int_part):,}".replace(",", ".")
@@ -33,7 +37,6 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             else:
                 s = f"{int(s):,}".replace(",", ".")
             return s
-
         else:  # USD
             s = f"{value:.6f}".rstrip("0").rstrip(".")
             if float(s) >= 1:
@@ -44,7 +47,6 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
                 else:
                     s = f"{int(s):,}".replace(",", ".")
             return s
-
     except Exception:
         return str(value)
 
@@ -70,17 +72,15 @@ async def job_trade_signals_notice(_=None):
 # =============================
 async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode="USD", vnd_rate=None):
     try:
-        signal = await analyze_coin_signal_v2(coin)   # ✅ dùng hàm mới
+        signal = await analyze_coin_signal_v2(coin)
 
         entry_price = format_price(signal["entry"], currency_mode, vnd_rate)
         tp_price = format_price(signal["tp"], currency_mode, vnd_rate)
         sl_price = format_price(signal["sl"], currency_mode, vnd_rate)
 
-        # ✅ Fix 1: hiển thị /VND và /USD viết hoa
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
 
-        # Đánh dấu tín hiệu
         if signal["strength"] >= 70:
             label = "⭐ TÍN HIỆU MẠNH ⭐"
         elif signal["strength"] <= 60:
@@ -88,7 +88,6 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
         else:
             label = ""
 
-        # ✅ Fix 2 + Fix 3
         msg = (
             f"{label}\n"
             f"📈 {symbol_display}\n"
@@ -113,6 +112,7 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
 # Gửi tín hiệu giao dịch
 # =============================
 async def job_trade_signals(_=None):
+    global _last_selected
     try:
         state = get_state()
         if not state["is_on"]:
@@ -129,21 +129,44 @@ async def job_trade_signals(_=None):
                 )
                 return
 
-        coins = await detect_trend(limit=5)  # ✅ lấy top 5 coin mạnh nhất
-
-        print(f"[DEBUG] detect_trend result: {len(coins)} coins")
-        for c in coins:
-            print(f" -> {c['symbol']} | vol={c['volume']} | change={c['change_pct']}")
-
-        if not coins:
+        # Lấy top 20 coin futures
+        all_coins = await get_top20_futures(limit=20)
+        if not all_coins:
             await bot.send_message(
                 chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                text="⚠️ Không tìm được coin đủ điều kiện để tạo tín hiệu."
+                text="⚠️ Không lấy được dữ liệu coin từ sàn."
             )
             return
 
-        # 3 Scalping (top 3) + 2 Swing (top 4-5)
-        for i, coin in enumerate(coins):
+        # Luôn giữ BTC và ETH
+        selected = [c for c in all_coins if c["symbol"] in ["BTC_USDT", "ETH_USDT"]]
+
+        # Ưu tiên coin biến động mạnh (>5%)
+        volatile = [c for c in all_coins if abs(c["change_pct"]) >= 5 and c["symbol"] not in ["BTC_USDT", "ETH_USDT"]]
+
+        # Loại coin đã chọn ở lần trước để tránh lặp
+        volatile = [c for c in volatile if c["symbol"] not in _last_selected]
+        remaining = [c for c in all_coins if c["symbol"] not in _last_selected and c["symbol"] not in ["BTC_USDT", "ETH_USDT"]]
+
+        # Bổ sung coin cho đủ 5
+        while len(selected) < 5:
+            if volatile:
+                selected.append(volatile.pop(0))
+            elif remaining:
+                selected.append(random.choice(remaining))
+                remaining.remove(selected[-1])  # tránh chọn trùng
+            else:
+                break
+
+        # Lưu lại lần chọn này
+        _last_selected = [c["symbol"] for c in selected]
+
+        print(f"[DEBUG] Selected {len(selected)} coins:")
+        for c in selected:
+            print(f" -> {c['symbol']} | vol={c['volume']} | change={c['change_pct']}")
+
+        # 3 Scalping (BTC, ETH, 1 coin khác) + 2 Swing
+        for i, coin in enumerate(selected):
             try:
                 mode = "SCALPING" if i < 3 else "SWING"
                 msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
@@ -166,7 +189,6 @@ def register_daily_jobs(job_queue):
     job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
     job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
 
-    # Notice trước 1 phút
     job_queue.run_repeating(
         job_trade_signals_notice,
         interval=1800,
@@ -174,7 +196,6 @@ def register_daily_jobs(job_queue):
         name="trade_signals_notice"
     )
 
-    # Gửi tín hiệu thật
     job_queue.run_repeating(
         job_trade_signals,
         interval=1800,
