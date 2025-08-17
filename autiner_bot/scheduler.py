@@ -49,6 +49,8 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             return s
     except Exception:
         return str(value)
+
+
 # =============================
 # Notice trước khi ra tín hiệu
 # =============================
@@ -71,6 +73,10 @@ async def job_trade_signals_notice(_=None):
 async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode="USD", vnd_rate=None):
     try:
         signal = await analyze_coin_signal_v2(coin)
+
+        # Nếu dữ liệu = 0 => trả về None để bỏ qua
+        if not signal or signal["entry"] <= 0 or signal["tp"] <= 0 or signal["sl"] <= 0:
+            return None
 
         entry_price = format_price(signal["entry"], currency_mode, vnd_rate)
         tp_price = format_price(signal["tp"], currency_mode, vnd_rate)
@@ -103,7 +109,7 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
     except Exception as e:
         print(f"[ERROR] create_trade_signal: {e}")
         print(traceback.format_exc())
-        return "⚠️ Không tạo được tín hiệu cho coin này."
+        return None
 
 
 # =============================
@@ -165,14 +171,29 @@ async def job_trade_signals(_=None):
             print(f" -> {c['symbol']} | vol={c['volume']} | change={c['change_pct']}")
 
         # 3 Scalping (BTC, ETH, 1 coin khác) + 2 Swing
+        sent_count = 0
         for i, coin in enumerate(selected):
             try:
                 mode = "SCALPING" if i < 3 else "SWING"
                 msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
-                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+
+                if not msg:
+                    print(f"[WARNING] Bỏ qua {coin['symbol']} vì dữ liệu giá không hợp lệ")
+                    # chọn coin thay thế
+                    if remaining:
+                        new_coin = remaining.pop(0)
+                        print(f"[INFO] Thay thế bằng {new_coin['symbol']}")
+                        msg = await create_trade_signal(new_coin, mode, currency_mode, vnd_rate)
+
+                if msg:
+                    await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+                    sent_count += 1
+
             except Exception as e:
                 print(f"[ERROR] gửi tín hiệu coin {coin.get('symbol')}: {e}")
                 continue
+
+        print(f"[INFO] Đã gửi {sent_count} tín hiệu giao dịch")
 
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
