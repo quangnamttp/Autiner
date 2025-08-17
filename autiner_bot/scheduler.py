@@ -3,7 +3,7 @@ from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import get_usdt_vnd_rate, detect_trend
-from autiner_bot.strategies.signal_analyzer import analyze_coin_signal
+from autiner_bot.strategies.signal_analyzer import analyze_coin_signal_v2  # ✅ dùng bản mới
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
 import traceback
@@ -23,10 +23,8 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
                 return "N/A VND"
             value = value * vnd_rate
 
-            # Giữ 10 số thập phân, bỏ số 0 thừa
             s = f"{value:.10f}".rstrip("0").rstrip(".")
 
-            # Thêm dấu chấm phân tách nghìn cho phần nguyên
             if "." in s:
                 int_part, dec_part = s.split(".")
                 int_part = f"{int(int_part):,}".replace(",", ".")
@@ -71,17 +69,19 @@ async def job_trade_signals_notice(_=None):
 # =============================
 async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode="USD", vnd_rate=None):
     try:
-        signal = await analyze_coin_signal(coin)
+        signal = await analyze_coin_signal_v2(coin)  # ✅ dùng phiên bản mới
+
+        # Bỏ qua tín hiệu yếu hơn 50%
+        if signal["strength"] < 50:
+            return None
 
         entry_price = format_price(signal["entry"], currency_mode, vnd_rate)
         tp_price = format_price(signal["tp"], currency_mode, vnd_rate)
         sl_price = format_price(signal["sl"], currency_mode, vnd_rate)
 
-        # ✅ Fix 1: hiển thị /VND và /USD viết hoa
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
 
-        # Đánh dấu tín hiệu
         if signal["strength"] >= 70:
             label = "⭐ TÍN HIỆU MẠNH ⭐"
         elif signal["strength"] <= 60:
@@ -89,7 +89,6 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
         else:
             label = ""
 
-        # ✅ Fix 2: bỏ khoảng trắng thừa + Fix 3: giờ ngày luôn ở cuối
         msg = (
             f"{label}\n"
             f"📈 {symbol_display}\n"
@@ -130,7 +129,7 @@ async def job_trade_signals(_=None):
                 )
                 return
 
-        coins = await detect_trend(limit=5)
+        coins = await detect_trend(limit=10)  # lấy rộng hơn để có đủ coin strength ≥ 50%
 
         print(f"[DEBUG] detect_trend result: {len(coins)} coins")
         for c in coins:
@@ -143,15 +142,25 @@ async def job_trade_signals(_=None):
             )
             return
 
-        # 3 Scalping (top 3) + 2 Swing (top 4-5)
+        sent = 0
         for i, coin in enumerate(coins):
+            if sent >= 5:  # đủ 5 tín hiệu thì dừng
+                break
             try:
-                mode = "SCALPING" if i < 3 else "SWING"
+                mode = "SCALPING" if sent < 3 else "SWING"
                 msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
-                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+                if msg:  # chỉ gửi nếu strength ≥ 50
+                    await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+                    sent += 1
             except Exception as e:
                 print(f"[ERROR] gửi tín hiệu coin {coin.get('symbol')}: {e}")
                 continue
+
+        if sent == 0:
+            await bot.send_message(
+                chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+                text="⚠️ Không có tín hiệu nào đủ mạnh (≥ 50%)."
+            )
 
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
@@ -167,7 +176,6 @@ def register_daily_jobs(job_queue):
     job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
     job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
 
-    # Notice trước 1 phút
     job_queue.run_repeating(
         job_trade_signals_notice,
         interval=1800,
@@ -175,7 +183,6 @@ def register_daily_jobs(job_queue):
         name="trade_signals_notice"
     )
 
-    # Gửi tín hiệu thật
     job_queue.run_repeating(
         job_trade_signals,
         interval=1800,
