@@ -65,7 +65,7 @@ async def get_market_funding_volume():
                 if data.get("success") and "data" in data:
                     latest = data["data"][0]
                     return {
-                        "funding": f"{float(latest.get('fundingRate', 0))*100:.4f}%",
+                        "funding": f"{float(latest.get('fundingRate', 0)) * 100:.4f}%",
                         "volume": latest.get("volume", "N/A"),
                         "trend": "Tăng" if float(latest.get("fundingRate", 0)) > 0 else "Giảm"
                     }
@@ -80,7 +80,8 @@ async def get_market_funding_volume():
 async def get_top_signals(limit: int = 10):
     """
     Lấy danh sách coin biến động mạnh nhất để bot tạo tín hiệu trade.
-    - Lọc coin rác (thanh khoản thấp).
+    - Ưu tiên cặp USDT.
+    - Lọc coin thanh khoản cực thấp (volume < 10,000).
     - Chuẩn bị dữ liệu cơ bản (RSI, MA).
     """
     try:
@@ -91,16 +92,29 @@ async def get_top_signals(limit: int = 10):
                 if data.get("success") and "data" in data:
                     coins = data["data"]
 
-                    # Chỉ lấy USDT pair và bỏ coin thanh khoản thấp
                     filtered = []
                     for c in coins:
                         if not c["symbol"].endswith("_USDT"):
                             continue
-                        volume = float(c.get("volume", 0))
-                        if volume < 100_000:  # lọc coin rác
+
+                        # lấy volume an toàn từ nhiều key khác nhau
+                        volume = 0.0
+                        try:
+                            volume = float(c.get("volume") or 0)
+                            if volume == 0:
+                                volume = float(c.get("amount24") or 0)
+                            if volume == 0:
+                                volume = float(c.get("turnover") or 0)
+                        except Exception:
+                            volume = 0.0
+
+                        # lọc nhẹ để tránh bỏ hết coin
+                        if volume < 10_000:
+                            print(f"[SKIP] {c['symbol']} volume thấp: {volume}")
                             continue
 
                         change_pct = float(c.get("riseFallRate", 0))
+
                         filtered.append({
                             "symbol": c["symbol"],
                             "lastPrice": float(c.get("lastPrice", 0)),
@@ -110,9 +124,13 @@ async def get_top_signals(limit: int = 10):
                             "ma_signal": "BUY" if change_pct > 0 else "SELL"
                         })
 
-                    # Sort theo % biến động mạnh
+                    if not filtered:
+                        print("[WARN] Không có coin nào qua bộ lọc!")
+
+                    # Sắp xếp theo % biến động mạnh
                     sorted_coins = sorted(filtered, key=lambda x: abs(x["change_pct"]), reverse=True)
                     return sorted_coins[:limit]
+
     except Exception as e:
         print(f"[ERROR] get_top_signals: {e}")
 
