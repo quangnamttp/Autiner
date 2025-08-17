@@ -16,6 +16,28 @@ bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
 
 # =============================
+# Hàm format giá
+# =============================
+def format_price(value: float, currency: str = "USD", vnd_rate: float | None = None) -> str:
+    try:
+        if currency == "VND":
+            if not vnd_rate or vnd_rate <= 0:
+                return "N/A VND"
+            value = value * vnd_rate
+            if value >= 1000:
+                return f"{value:,.0f}".replace(",", ".")
+            else:
+                return f"{value:.6f}".rstrip("0").rstrip(".")
+        else:  # USD
+            if value >= 1:
+                return f"{value:,.2f}"
+            else:
+                return f"{value:.6f}".rstrip("0").rstrip(".")
+    except Exception:
+        return str(value)
+
+
+# =============================
 # Tạo tín hiệu giao dịch
 # =============================
 async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode="USD", vnd_rate=None):
@@ -48,6 +70,23 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
         print(f"[ERROR] create_trade_signal: {e}")
         print(traceback.format_exc())
         return "⚠️ Không tạo được tín hiệu cho coin này."
+
+
+# =============================
+# Báo trước 1 phút
+# =============================
+async def job_trade_signals_notice(_=None):
+    try:
+        state = get_state()
+        if not state["is_on"]:
+            return
+        await bot.send_message(
+            chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch!"
+        )
+    except Exception as e:
+        print(f"[ERROR] job_trade_signals_notice: {e}")
+        print(traceback.format_exc())
 
 
 # =============================
@@ -97,3 +136,30 @@ async def job_trade_signals(_=None):
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
+
+
+# =============================
+# Đăng ký job sáng, tối và tín hiệu
+# =============================
+def register_daily_jobs(job_queue):
+    tz = pytz.timezone("Asia/Ho_Chi_Minh")
+
+    # Báo cáo sáng
+    job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
+
+    # Báo cáo tối
+    job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
+
+    # Lặp tín hiệu 30 phút (06:15 -> 21:45)
+    job_queue.run_repeating(
+        job_trade_signals_notice,
+        interval=1800,    # 30 phút
+        first=time(hour=6, minute=14, tzinfo=tz),
+        name="signal_notice"
+    )
+    job_queue.run_repeating(
+        job_trade_signals,
+        interval=1800,    # 30 phút
+        first=time(hour=6, minute=15, tzinfo=tz),
+        name="trade_signals"
+    )
