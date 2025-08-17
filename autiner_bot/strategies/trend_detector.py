@@ -36,21 +36,28 @@ async def detect_trend(limit: int = 5):
                     print("[ERROR] detect_trend - API không trả về field 'data'")
                     return []
 
-                # =============================
-                # B1. Gom toàn bộ coin USDT
-                # =============================
                 candidates = []
                 for c in data["data"]:
-                    if not str(c.get("symbol", "")).endswith("_USDT"):
+                    symbol = c.get("symbol", "")
+                    if not symbol.endswith("_USDT"):
                         continue
-                    volume = float(c.get("volume", 0) or 0)
-                    if volume <= 0:
+
+                    # Dùng turnover (khối lượng quote) thay cho volume
+                    volume = float(c.get("turnover", 0) or 0)
+
+                    # Nếu API không có riseFallRate, ta tự tính %
+                    last_price = float(c.get("lastPrice", 0) or 0)
+                    open_price = float(c.get("openPrice", last_price) or last_price)
+                    change_pct = ((last_price - open_price) / open_price * 100) if open_price > 0 else 0
+
+                    if volume <= 0 or last_price <= 0:
                         continue
+
                     candidates.append({
-                        "symbol": c["symbol"],
-                        "lastPrice": float(c.get("lastPrice", 0) or 0),
+                        "symbol": symbol,
+                        "lastPrice": last_price,
                         "volume": volume,
-                        "change_pct": float(c.get("riseFallRate", 0) or 0),
+                        "change_pct": change_pct,
                     })
 
                 if not candidates:
@@ -76,7 +83,7 @@ async def detect_trend(limit: int = 5):
                     # Lấy dữ liệu kỹ thuật (RSI & MA)
                     closes = await fetch_klines(coin["symbol"], limit=30)
                     if not closes:
-                        closes = [last_price] * 20  # fallback
+                        closes = [last_price] * 20  # fallback an toàn
 
                     try:
                         rsi = calculate_rsi(closes, 14)
