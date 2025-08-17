@@ -23,15 +23,30 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             if not vnd_rate or vnd_rate <= 0:
                 return "N/A VND"
             value = value * vnd_rate
-            if value >= 1000:
-                return f"{value:,.0f}".replace(",", ".")
+
+            # Giữ 10 số thập phân, bỏ số 0 thừa
+            s = f"{value:.10f}".rstrip("0").rstrip(".")
+
+            # Thêm dấu chấm phân tách nghìn cho phần nguyên
+            if "." in s:
+                int_part, dec_part = s.split(".")
+                int_part = f"{int(int_part):,}".replace(",", ".")
+                s = f"{int_part}.{dec_part}"
             else:
-                return f"{value:.6f}".rstrip("0").rstrip(".")
+                s = f"{int(s):,}".replace(",", ".")
+            return s
+
         else:  # USD
-            if value >= 1:
-                return f"{value:,.2f}"
-            else:
-                return f"{value:.6f}".rstrip("0").rstrip(".")
+            s = f"{value:.6f}".rstrip("0").rstrip(".")
+            if float(s) >= 1:
+                if "." in s:
+                    int_part, dec_part = s.split(".")
+                    int_part = f"{int(int_part):,}".replace(",", ".")
+                    s = f"{int_part}.{dec_part}"
+                else:
+                    s = f"{int(s):,}".replace(",", ".")
+            return s
+
     except Exception:
         return str(value)
 
