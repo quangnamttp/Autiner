@@ -3,9 +3,8 @@ from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
-from autiner_bot.data_sources.mexc import get_usdt_vnd_rate
+from autiner_bot.data_sources.mexc import get_usdt_vnd_rate, detect_trend
 from autiner_bot.strategies.signal_analyzer import analyze_coin_signal
-from autiner_bot.data_sources.mexc import detect_trend
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
 import traceback
@@ -66,16 +65,26 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
 
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.lower()}")
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
-        highlight = "⭐" if signal["strength"] >= 70 else ""
+
+        # Đánh dấu tín hiệu
+        if signal["strength"] >= 70:
+            label = "⭐ TÍN HIỆU MẠNH ⭐"
+        elif signal["strength"] <= 60:
+            label = "⚠️ THAM KHẢO ⚠️"
+        else:
+            label = ""
 
         msg = (
-            f"{highlight}📈 {symbol_display}\n"
-            f"{side_icon} - {mode.upper()}\n"
+            f"{label}\n\n"
+            f"📈 {symbol_display}\n"
+            f"{side_icon}\n"
+            f"📌 Chế độ: {mode.upper()}\n"
+            f"📑 Loại lệnh: {signal['orderType']}\n\n"
             f"💰 Entry: {entry_price} {currency_mode}\n"
             f"🎯 TP: {tp_price} {currency_mode}\n"
-            f"🛡️ SL: {sl_price} {currency_mode}\n"
+            f"🛡️ SL: {sl_price} {currency_mode}\n\n"
             f"📊 Độ mạnh: {signal['strength']}%\n"
-            f"📌 Lý do: {signal['reason']}\n"
+            f"📌 Lý do:\n{signal['reason']}\n\n"
             f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
         )
         return msg
