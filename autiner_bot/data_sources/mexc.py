@@ -116,6 +116,9 @@ async def get_top20_futures(limit: int = 20):
                     for c in coins:
                         if not c["symbol"].endswith("_USDT"):
                             continue
+                        # ✅ bỏ coin không có lastPrice hoặc lastPrice = 0
+                        if not c.get("lastPrice") or float(c.get("lastPrice", 0)) <= 0:
+                            continue
                         volume = float(c.get("volume", 0))
                         change_pct = float(c.get("riseFallRate", 0))
                         filtered.append({
@@ -192,6 +195,19 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     last_price = coin["lastPrice"]
     change_pct = coin["change_pct"]
     volume = coin.get("volume", 0)
+
+    # ✅ chặn coin giá 0
+    if last_price <= 0:
+        return {
+            "symbol": symbol,
+            "direction": "LONG",
+            "orderType": "MARKET",
+            "entry": 0,
+            "tp": 0,
+            "sl": 0,
+            "strength": 0,
+            "reason": "⚠️ Không có dữ liệu giá hợp lệ"
+        }
 
     closes = await fetch_klines(symbol, limit=100)
     if not closes:
