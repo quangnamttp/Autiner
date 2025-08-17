@@ -32,27 +32,42 @@ async def get_usdt_vnd_rate():
 
 
 # =============================
-# Sentiment thị trường BTC
+# Sentiment thị trường (Long/Short theo volume)
 # =============================
 async def get_market_sentiment():
     try:
-        url = "https://contract.mexc.com/api/v1/contract/long_short_account_ratio?symbol=BTC_USDT&period=5m"
+        url = S.MEXC_TICKER_URL
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=10) as resp:
                 data = await resp.json()
-                if data.get("success") and data.get("data"):
-                    latest = data["data"][-1]
-                    long_acc = float(latest.get("longAccount", 0))
-                    short_acc = float(latest.get("shortAccount", 0))
-                    total = long_acc + short_acc
+                if data.get("success") and "data" in data:
+                    coins = data["data"]
+
+                    long_vol = 0
+                    short_vol = 0
+
+                    for c in coins:
+                        if not c["symbol"].endswith("_USDT"):
+                            continue
+                        vol = float(c.get("volume", 0))
+                        change_pct = float(c.get("riseFallRate", 0))
+
+                        if change_pct >= 0:
+                            long_vol += vol
+                        else:
+                            short_vol += vol
+
+                    total = long_vol + short_vol
                     if total > 0:
-                        long_pct = (long_acc / total) * 100
-                        short_pct = (short_acc / total) * 100
+                        long_pct = (long_vol / total) * 100
+                        short_pct = (short_vol / total) * 100
                     else:
                         long_pct, short_pct = 50.0, 50.0
+
                     return {"long": round(long_pct, 2), "short": round(short_pct, 2)}
     except Exception as e:
         print(f"[ERROR] get_market_sentiment: {e}")
+
     return {"long": 50.0, "short": 50.0}
 
 
