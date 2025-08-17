@@ -111,7 +111,7 @@ async def get_top20_futures(limit: int = 20):
 
 
 # =============================
-# Detect trend (gộp từ trend_detector.py)
+# Detect trend (lấy top coin mạnh nhất)
 # =============================
 async def detect_trend(limit: int = 5):
     """
@@ -126,7 +126,6 @@ async def detect_trend(limit: int = 5):
 
         # Ưu tiên chọn biến động mạnh nhất trong top 20
         sorted_by_change = sorted(coins, key=lambda x: abs(x["change_pct"]), reverse=True)
-
         return sorted_by_change[:limit]
 
     except Exception as e:
@@ -229,10 +228,7 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
         entry_price = last_price
     else:  # biến động nhỏ/vừa -> Limit
         order_type = "LIMIT"
-        if side == "LONG":
-            entry_price = min(ma5, last_price)  # mua ở giá thấp hơn
-        else:
-            entry_price = max(ma5, last_price)  # bán ở giá cao hơn
+        entry_price = min(ma5, last_price) if side == "LONG" else max(ma5, last_price)
 
     # --- ATR tính volatility ---
     highs = np.array(closes[-20:]) * (1 + 0.002)  # giả lập high ~ close ± 0.2%
