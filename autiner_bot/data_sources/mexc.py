@@ -4,6 +4,16 @@ from autiner_bot.settings import S
 
 
 # =============================
+# Chuẩn hóa symbol cho Futures
+# =============================
+def normalize_symbol(symbol: str) -> str:
+    # MEXC Futures chuẩn USDT-M: BTC_USDT_UMCBL
+    if not symbol.endswith("_UMCBL"):
+        return symbol.replace("_USDT", "_USDT_UMCBL")
+    return symbol
+
+
+# =============================
 # Lấy tỷ giá USDT/VND từ Binance P2P
 # =============================
 async def get_usdt_vnd_rate():
@@ -116,7 +126,6 @@ async def get_top20_futures(limit: int = 20):
                     for c in coins:
                         if not c["symbol"].endswith("_USDT"):
                             continue
-                        # ✅ bỏ coin không có lastPrice hoặc lastPrice = 0
                         if not c.get("lastPrice") or float(c.get("lastPrice", 0)) <= 0:
                             continue
                         volume = float(c.get("volume", 0))
@@ -174,17 +183,35 @@ def calculate_rsi(prices, period: int = 14) -> float:
 # Lấy dữ liệu Kline
 # =============================
 async def fetch_klines(symbol: str, limit: int = 100):
-    url = S.MEXC_KLINES_URL.format(sym=symbol)
+    sym = normalize_symbol(symbol)
+    url = S.MEXC_KLINES_URL.format(sym=sym)
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=10) as resp:
                 data = await resp.json()
-                if data.get("success") and "data" in data:
+                if data.get("success") and "data" in data and data["data"]:
                     closes = [float(c[4]) for c in data["data"]]
                     return closes[-limit:]
     except Exception as e:
         print(f"[ERROR] fetch_klines {symbol}: {e}")
     return []
+
+
+# =============================
+# Lấy giá fallback (fair price)
+# =============================
+async def fetch_last_price(symbol: str) -> float:
+    sym = normalize_symbol(symbol)
+    url = f"https://contract.mexc.com/api/v1/contract/fair_price/{sym}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                if data.get("success") and "data" in data:
+                    return float(data["data"].get("fairPrice", 0))
+    except Exception as e:
+        print(f"[ERROR] fetch_last_price {symbol}: {e}")
+    return 0.0
 
 
 # =============================
@@ -196,7 +223,6 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     change_pct = coin["change_pct"]
     volume = coin.get("volume", 0)
 
-    # ✅ chặn coin giá 0
     if last_price <= 0:
         return {
             "symbol": symbol,
@@ -211,16 +237,21 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
 
     closes = await fetch_klines(symbol, limit=100)
     if not closes or len(closes) < 20:
-        return {
-            "symbol": symbol,
-            "direction": "LONG",
-            "orderType": "MARKET",
-            "entry": 0,
-            "tp": 0,
-            "sl": 0,
-            "strength": 0,
-            "reason": "⚠️ Không có dữ liệu Kline đủ"
-        }
+        last_fallback = await fetch_last_price(symbol)
+        if last_fallback > 0:
+            closes = [last_fallback] * 30
+            last_price = last_fallback
+        else:
+            return {
+                "symbol": symbol,
+                "direction": "LONG",
+                "orderType": "MARKET",
+                "entry": 0,
+                "tp": 0,
+                "sl": 0,
+                "strength": 0,
+                "reason": "⚠️ Không có dữ liệu Kline hoặc giá fallback"
+            }
 
     rsi = calculate_rsi(closes, 14)
     if rsi > 70:
@@ -234,19 +265,15 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     ma20 = np.mean(closes[-20:])
     ma_signal = "BUY" if ma5 > ma20 else "SELL"
 
-    # =============================
     # Quy tắc chọn hướng
-    # =============================
-    side = "LONG"
     if (rsi < 30 and ma5 > ma20 and change_pct > 0):
         side = "LONG"
     elif (rsi > 70 and ma5 < ma20 and change_pct < 0):
         side = "SHORT"
     else:
-        # fallback: theo trend
         side = "LONG" if change_pct >= 0 else "SHORT"
 
-    # ✅ Luôn MARKET
+    # Luôn MARKET
     order_type = "MARKET"
     entry_price = last_price
 
