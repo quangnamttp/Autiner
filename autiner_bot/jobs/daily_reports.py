@@ -8,7 +8,7 @@ from autiner_bot.data_sources.mexc import (
     get_market_funding_volume,
     get_usdt_vnd_rate
 )
-from autiner_bot.strategies.trend_detector import get_top20_futures   # ✅ dùng hàm mới
+from autiner_bot.strategies.trend_detector import get_top20_futures   # ✅ thay thế get_top_signals
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
@@ -25,6 +25,7 @@ async def job_morning_message():
         weekday = now.strftime("%A")
         date_str = now.strftime("%d/%m/%Y")
 
+        # Chuyển sang tiếng Việt cho thứ
         weekday_vi = {
             "Monday": "Thứ Hai",
             "Tuesday": "Thứ Ba",
@@ -42,12 +43,13 @@ async def job_morning_message():
         # Xu hướng thị trường
         sentiment = await get_market_sentiment()
 
-        # Top 5 coin (volume cao nhất)
+        # Top 5 coin nổi bật (từ top 20 futures theo volume)
         top_coins = await get_top20_futures(limit=5)
 
         # Funding & Volume
         funding_info = await get_market_funding_volume()
 
+        # Thông điệp theo tình hình
         if sentiment["short"] > 60 or sum(1 for c in top_coins if c["change_pct"] < 0) >= 3:
             greeting = (
                 f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\n"
@@ -59,14 +61,16 @@ async def job_morning_message():
                 f"Thị trường hôm nay có nhiều **biến động**, mình cùng theo dõi nhé!"
             )
 
+        # Danh sách top coin format dạng bảng
         coin_lines = []
         for c in top_coins:
             symbol = c['symbol'].replace('_USDT', '/USDT')
             change_pct = f"{c['change_pct']:+.2f}%"
-            coin_lines.append(f"{symbol:<10} | vol={c['volume']:.0f} | {change_pct:>7}")
+            coin_lines.append(f"{symbol:<10} | {change_pct:>7}")
 
         coins_table = "\n".join(coin_lines)
 
+        # Ghép tin nhắn
         msg = (
             f"📅 Hôm nay {weekday_vi}, {date_str}\n"
             f"{greeting}\n\n"
