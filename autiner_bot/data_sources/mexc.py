@@ -185,7 +185,7 @@ async def fetch_klines(symbol: str, limit: int = 100):
 
 
 # =============================
-# Phân tích tín hiệu V2
+# Phân tích tín hiệu V2 (luôn MARKET)
 # =============================
 async def analyze_coin_signal_v2(coin: dict) -> dict:
     symbol = coin["symbol"]
@@ -216,12 +216,9 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     else:
         side = "LONG" if change_pct >= 0 else "SHORT"
 
-    if abs(change_pct) > 2:
-        order_type = "MARKET"
-        entry_price = last_price
-    else:
-        order_type = "LIMIT"
-        entry_price = min(ma5, last_price) if side == "LONG" else max(ma5, last_price)
+    # ✅ Luôn MARKET
+    order_type = "MARKET"
+    entry_price = last_price
 
     highs = np.array(closes[-20:]) * (1 + 0.002)
     lows = np.array(closes[-20:]) * (1 - 0.002)
