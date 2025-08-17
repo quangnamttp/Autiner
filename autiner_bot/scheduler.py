@@ -25,16 +25,14 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
                 return "N/A VND"
             value = value * vnd_rate
             if value >= 1000:
-                return f"{value:,.0f}".replace(",", ".")
-            elif value >= 1:
-                return f"{value:.4f}".rstrip("0").rstrip(".")
+                return f"{value:,.0f}".replace(",", ".")   # giữ nguyên số lớn
             else:
-                return str(int(value))
+                return f"{value:.6f}".rstrip("0").rstrip(".")  # giữ số nhỏ, không làm tròn về 0
         else:  # USD
             if value >= 1:
                 return f"{value:,.2f}"
             else:
-                return f"{value:.6f}"
+                return f"{value:.6f}".rstrip("0").rstrip(".")
     except Exception:
         return str(value)
 
@@ -43,38 +41,39 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
 # Tạo tín hiệu giao dịch
 # =============================
 async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode="USD", vnd_rate=None):
-    last_price = coin.get("lastPrice", 0.0)
-    signal = analyze_coin_signal(coin)
+    try:
+        signal = await analyze_coin_signal(coin)   # FIX: thêm await
 
-    tp_price = last_price * (1 + signal["tp_pct"] / 100)
-    sl_price = last_price * (1 + signal["sl_pct"] / 100)
+        entry_price = format_price(signal["entry"], currency_mode, vnd_rate)
+        tp_price = format_price(signal["tp"], currency_mode, vnd_rate)   # FIX: lấy trực tiếp từ signal
+        sl_price = format_price(signal["sl"], currency_mode, vnd_rate)
 
-    entry_price = format_price(last_price, currency_mode, vnd_rate)
-    tp_price = format_price(tp_price, currency_mode, vnd_rate)
-    sl_price = format_price(sl_price, currency_mode, vnd_rate)
+        # Hiển thị symbol + side
+        symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.lower()}")
+        side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
+        highlight = "⭐" if signal["strength"] >= 70 else ""
 
-    # Hiển thị symbol + side
-    symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode}")
-    side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
-    highlight = "⭐" if signal["strength"] >= 70 else ""
+        # Trend coin
+        trend_name = coin.get("trend", "Khác")
+        trade_style = mode.upper()  # SCALPING hoặc SWING
 
-    # Trend coin (nếu detect_trend có gán)
-    trend_name = coin.get("trend", "Khác")
-    trade_style = mode.upper()  # SCALPING hoặc SWING
-
-    msg = (
-        f"{highlight}📈 {symbol_display}\n"
-        f"{side_icon} - {trade_style}\n"
-        f"🔹 Trend: {trend_name}\n"
-        f"🔹 Kiểu vào lệnh: {signal['orderType'].upper()}\n"
-        f"💰 Entry: {entry_price} {currency_mode}\n"
-        f"🎯 TP: {tp_price} {currency_mode}\n"
-        f"🛡️ SL: {sl_price} {currency_mode}\n"
-        f"📊 Độ mạnh: {signal['strength']}%\n"
-        f"📌 Lý do: {signal['reason']}\n"
-        f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
-    )
-    return msg
+        msg = (
+            f"{highlight}📈 {symbol_display}\n"
+            f"{side_icon} - {trade_style}\n"
+            f"🔹 Trend: {trend_name}\n"
+            f"🔹 Kiểu vào lệnh: {signal['orderType'].upper()}\n"
+            f"💰 Entry: {entry_price} {currency_mode}\n"
+            f"🎯 TP: {tp_price} {currency_mode}\n"
+            f"🛡️ SL: {sl_price} {currency_mode}\n"
+            f"📊 Độ mạnh: {signal['strength']}%\n"
+            f"📌 Lý do: {signal['reason']}\n"
+            f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
+        )
+        return msg
+    except Exception as e:
+        print(f"[ERROR] create_trade_signal: {e}")
+        print(traceback.format_exc())
+        return "⚠️ Không tạo được tín hiệu cho coin này."
 
 
 # =============================
@@ -124,9 +123,13 @@ async def job_trade_signals(_=None):
 
         # 3 Scalping (top 3) + 2 Swing (top 4-5)
         for i, coin in enumerate(coins):
-            mode = "SCALPING" if i < 3 else "SWING"
-            msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+            try:
+                mode = "SCALPING" if i < 3 else "SWING"
+                msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
+                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+            except Exception as e:
+                print(f"[ERROR] gửi tín hiệu coin {coin.get('symbol')}: {e}")
+                continue
 
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
@@ -149,12 +152,12 @@ def register_daily_jobs(job_queue):
     job_queue.run_repeating(
         job_trade_signals_notice,
         interval=1800,  # 30 phút
-        first=time(hour=6, minute=14, tzinfo=tz),
+        first=60,       # FIX: chạy ngay sau 60s, thay vì cố định 6:14
         name="signal_notice"
     )
     job_queue.run_repeating(
         job_trade_signals,
         interval=1800,  # 30 phút
-        first=time(hour=6, minute=15, tzinfo=tz),
+        first=120,      # FIX: chạy ngay sau 120s, thay vì cố định 6:15
         name="trade_signals"
     )
