@@ -6,12 +6,11 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_market_sentiment,
     get_market_funding_volume,
-    get_usdt_vnd_rate
+    get_usdt_vnd_rate,
+    get_top20_futures,   # lấy trực tiếp từ mexc.py
 )
-from autiner_bot.strategies.trend_detector import get_top20_futures   # ✅ thay thế get_top_signals
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
-
 
 # ===== BUỔI SÁNG =====
 async def job_morning_message():
@@ -25,7 +24,7 @@ async def job_morning_message():
         weekday = now.strftime("%A")
         date_str = now.strftime("%d/%m/%Y")
 
-        # Chuyển sang tiếng Việt cho thứ
+        # Chuyển sang tiếng Việt
         weekday_vi = {
             "Monday": "Thứ Hai",
             "Tuesday": "Thứ Ba",
@@ -43,25 +42,19 @@ async def job_morning_message():
         # Xu hướng thị trường
         sentiment = await get_market_sentiment()
 
-        # Top 5 coin nổi bật (từ top 20 futures theo volume)
+        # Top 5 coin nổi bật
         top_coins = await get_top20_futures(limit=5)
 
         # Funding & Volume
         funding_info = await get_market_funding_volume()
 
-        # Thông điệp theo tình hình
+        # Thông điệp
         if sentiment["short"] > 60 or sum(1 for c in top_coins if c["change_pct"] < 0) >= 3:
-            greeting = (
-                f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\n"
-                f"Thị trường hôm nay có dấu hiệu **giảm mạnh**, hãy cẩn trọng nhé!"
-            )
+            greeting = f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\nThị trường hôm nay có dấu hiệu **giảm mạnh**, hãy cẩn trọng nhé!"
         else:
-            greeting = (
-                f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\n"
-                f"Thị trường hôm nay có nhiều **biến động**, mình cùng theo dõi nhé!"
-            )
+            greeting = f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\nThị trường hôm nay có nhiều **biến động**, mình cùng theo dõi nhé!"
 
-        # Danh sách top coin format dạng bảng
+        # Danh sách coin
         coin_lines = []
         for c in top_coins:
             symbol = c['symbol'].replace('_USDT', '/USDT')
@@ -70,7 +63,7 @@ async def job_morning_message():
 
         coins_table = "\n".join(coin_lines)
 
-        # Ghép tin nhắn
+        # Tin nhắn cuối
         msg = (
             f"📅 Hôm nay {weekday_vi}, {date_str}\n"
             f"{greeting}\n\n"
