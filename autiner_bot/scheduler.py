@@ -7,6 +7,7 @@ from autiner_bot.data_sources.mexc import (
     analyze_coin_signal_v2,
     get_top20_futures,
 )
+from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
 import traceback
 import pytz
@@ -153,13 +154,14 @@ async def job_trade_signals(_=None):
             if volatile:
                 selected.append(volatile.pop(0))
             elif remaining:
-                selected.append(random.choice(remaining))
-                remaining.remove(selected[-1])  # tránh chọn trùng
+                choice = random.choice(remaining)
+                selected.append(choice)
+                remaining.remove(choice)
             else:
-                break
+                break  # hết coin thì thoát
 
-        # Lưu lại lần chọn này
-        _last_selected = [c["symbol"] for c in selected]
+        # Lưu lại lần chọn này (giữ tối đa 10 để tránh bí)
+        _last_selected = ([c["symbol"] for c in selected] + _last_selected)[:10]
 
         print(f"[DEBUG] Selected {len(selected)} coins:")
         for c in selected:
