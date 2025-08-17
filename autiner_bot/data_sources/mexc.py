@@ -210,32 +210,47 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
         }
 
     closes = await fetch_klines(symbol, limit=100)
-    if not closes:
-        closes = [last_price] * 20
+    if not closes or len(closes) < 20:
+        return {
+            "symbol": symbol,
+            "direction": "LONG",
+            "orderType": "MARKET",
+            "entry": 0,
+            "tp": 0,
+            "sl": 0,
+            "strength": 0,
+            "reason": "⚠️ Không có dữ liệu Kline đủ"
+        }
 
     rsi = calculate_rsi(closes, 14)
     if rsi > 70:
-        rsi_signal = "QUÁ MUA (SELL)"
+        rsi_signal = "QUÁ MUA"
     elif rsi < 30:
-        rsi_signal = "QUÁ BÁN (BUY)"
+        rsi_signal = "QUÁ BÁN"
     else:
         rsi_signal = "TRUNG LẬP"
 
-    ma5 = np.mean(closes[-5:]) if len(closes) >= 5 else last_price
-    ma20 = np.mean(closes[-20:]) if len(closes) >= 20 else last_price
+    ma5 = np.mean(closes[-5:])
+    ma20 = np.mean(closes[-20:])
     ma_signal = "BUY" if ma5 > ma20 else "SELL"
 
-    if rsi < 30 or (ma5 > ma20 and change_pct > 0):
+    # =============================
+    # Quy tắc chọn hướng
+    # =============================
+    side = "LONG"
+    if (rsi < 30 and ma5 > ma20 and change_pct > 0):
         side = "LONG"
-    elif rsi > 70 or (ma5 < ma20 and change_pct < 0):
+    elif (rsi > 70 and ma5 < ma20 and change_pct < 0):
         side = "SHORT"
     else:
+        # fallback: theo trend
         side = "LONG" if change_pct >= 0 else "SHORT"
 
     # ✅ Luôn MARKET
     order_type = "MARKET"
     entry_price = last_price
 
+    # ATR để tính TP/SL
     highs = np.array(closes[-20:]) * (1 + 0.002)
     lows = np.array(closes[-20:]) * (1 - 0.002)
     tr = np.maximum(highs - lows, np.abs(highs - closes[-2]), np.abs(lows - closes[-2]))
@@ -251,12 +266,13 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     tp_pct = (tp_price / entry_price - 1) * 100
     sl_pct = (sl_price / entry_price - 1) * 100
 
+    # Strength
     strength = 50
     if abs(change_pct) > 3:
         strength += 20
-    if side == "LONG" and rsi < 25:
+    if side == "LONG" and rsi < 25 and ma5 > ma20:
         strength += 15
-    if side == "SHORT" and rsi > 75:
+    if side == "SHORT" and rsi > 75 and ma5 < ma20:
         strength += 15
     if volume > 10_000_000:
         strength += 10
