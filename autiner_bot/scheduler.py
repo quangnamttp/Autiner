@@ -3,8 +3,7 @@ from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import get_usdt_vnd_rate
-# đổi detect_trend -> get_top20_futures
-from autiner_bot.strategies.trend_detector import get_top20_futures
+from autiner_bot.strategies.trend_detector import detect_trend
 from autiner_bot.strategies.signal_analyzer import analyze_coin_signal
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -52,12 +51,9 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
         highlight = "⭐" if signal["strength"] >= 70 else ""
 
-        trade_style = mode.upper()
-
         msg = (
             f"{highlight}📈 {symbol_display}\n"
-            f"{side_icon} - {trade_style}\n"
-            f"🔹 Kiểu vào lệnh: {signal['orderType'].upper()}\n"
+            f"{side_icon} - {mode.upper()}\n"
             f"💰 Entry: {entry_price} {currency_mode}\n"
             f"🎯 TP: {tp_price} {currency_mode}\n"
             f"🛡️ SL: {sl_price} {currency_mode}\n"
@@ -70,23 +66,6 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
         print(f"[ERROR] create_trade_signal: {e}")
         print(traceback.format_exc())
         return "⚠️ Không tạo được tín hiệu cho coin này."
-
-
-# =============================
-# Báo trước 1 phút
-# =============================
-async def job_trade_signals_notice(_=None):
-    try:
-        state = get_state()
-        if not state["is_on"]:
-            return
-        await bot.send_message(
-            chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch!"
-        )
-    except Exception as e:
-        print(f"[ERROR] job_trade_signals_notice: {e}")
-        print(traceback.format_exc())
 
 
 # =============================
@@ -109,10 +88,9 @@ async def job_trade_signals(_=None):
                 )
                 return
 
-        # dùng hàm mới thay detect_trend
-        coins = await get_top20_futures(limit=5)
+        coins = await detect_trend(limit=5)
 
-        print(f"[DEBUG] get_top20_futures result: {len(coins)} coins")
+        print(f"[DEBUG] detect_trend result: {len(coins)} coins")
         for c in coins:
             print(f" -> {c['symbol']} | vol={c['volume']} | change={c['change_pct']}")
 
@@ -144,22 +122,7 @@ async def job_trade_signals(_=None):
 def register_daily_jobs(job_queue):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
 
-    # Báo cáo sáng
     job_queue.run_daily(job_morning_message, time=time(hour=6, minute=0, tzinfo=tz), name="morning_report")
-
-    # Báo cáo tối
     job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
 
-    # Lặp tín hiệu 30 phút (06:15 -> 21:45)
-    job_queue.run_repeating(
-        job_trade_signals_notice,
-        interval=1800,    # 30 phút
-        first=time(hour=6, minute=14, tzinfo=tz),
-        name="signal_notice"
-    )
-    job_queue.run_repeating(
-        job_trade_signals,
-        interval=1800,    # 30 phút
-        first=time(hour=6, minute=15, tzinfo=tz),
-        name="trade_signals"
-    )
+    job_queue.run_repeating(job_trade_signals, interval=1800, first=time(hour=6, minute=15, tzinfo=tz), name="trade_signals")
