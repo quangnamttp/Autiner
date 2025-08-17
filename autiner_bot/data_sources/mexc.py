@@ -229,7 +229,10 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
         entry_price = last_price
     else:  # biến động nhỏ/vừa -> Limit
         order_type = "LIMIT"
-        entry_price = ma5 if side == "LONG" else ma5
+        if side == "LONG":
+            entry_price = min(ma5, last_price)  # mua ở giá thấp hơn
+        else:
+            entry_price = max(ma5, last_price)  # bán ở giá cao hơn
 
     # --- ATR tính volatility ---
     highs = np.array(closes[-20:]) * (1 + 0.002)  # giả lập high ~ close ± 0.2%
@@ -259,7 +262,8 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     if volume > 10_000_000:  # volume cao
         strength += 10
 
-    strength = min(100, max(1, strength))
+    # Giữ trong khoảng 50–100
+    strength = min(100, max(50, strength))
 
     return {
         "symbol": symbol,
