@@ -72,7 +72,7 @@ async def get_market_sentiment():
 
 
 # =============================
-# Funding + Volume
+# Funding + Volume (trung bình & tổng)
 # =============================
 async def get_market_funding_volume():
     try:
@@ -81,11 +81,19 @@ async def get_market_funding_volume():
             async with session.get(url, timeout=10) as resp:
                 data = await resp.json()
                 if data.get("success") and "data" in data:
-                    latest = data["data"][0]
+                    all_data = data["data"]
+
+                    # Trung bình funding toàn thị trường
+                    rates = [float(c.get("fundingRate", 0)) for c in all_data if "fundingRate" in c]
+                    avg_funding = sum(rates) / len(rates) if rates else 0
+
+                    # Tổng volume toàn thị trường
+                    total_vol = sum(float(c.get("volume", 0)) for c in all_data if "volume" in c)
+
                     return {
-                        "funding": f"{float(latest.get('fundingRate', 0)) * 100:.4f}%",
-                        "volume": latest.get("volume", "N/A"),
-                        "trend": "Tăng" if float(latest.get("fundingRate", 0)) > 0 else "Giảm"
+                        "funding": f"{avg_funding * 100:.4f}%",
+                        "volume": f"{total_vol:,.0f}",
+                        "trend": "Tăng" if avg_funding > 0 else "Giảm"
                     }
     except Exception as e:
         print(f"[ERROR] get_market_funding_volume: {e}")
