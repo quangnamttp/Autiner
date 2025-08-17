@@ -30,14 +30,13 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
                 return "N/A VND"
             value = value * vnd_rate
 
-            s = f"{value:.10f}".rstrip("0").rstrip(".")
-            if "." in s:
-                int_part, dec_part = s.split(".")
-                int_part = f"{int(int_part):,}".replace(",", ".")
-                s = f"{int_part}.{dec_part}"
+            # Nếu số quá lớn thì làm tròn, chỉ giữ số nguyên
+            if value >= 1_000_000:
+                return f"{round(value):,}".replace(",", ".")
             else:
-                s = f"{int(s):,}".replace(",", ".")
-            return s
+                # Nếu nhỏ hơn thì giữ tối đa 2 số thập phân
+                s = f"{value:.2f}".rstrip("0").rstrip(".")
+                return s.replace(",", ".")
         else:  # USD
             s = f"{value:.6f}".rstrip("0").rstrip(".")
             if float(s) >= 1:
@@ -50,7 +49,6 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             return s
     except Exception:
         return str(value)
-
 
 # =============================
 # Notice trước khi ra tín hiệu
