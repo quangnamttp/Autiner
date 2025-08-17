@@ -25,9 +25,9 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
                 return "N/A VND"
             value = value * vnd_rate
             if value >= 1000:
-                return f"{value:,.0f}".replace(",", ".")   # giữ nguyên số lớn
+                return f"{value:,.0f}".replace(",", ".")
             else:
-                return f"{value:.6f}".rstrip("0").rstrip(".")  # giữ số nhỏ, không làm tròn về 0
+                return f"{value:.6f}".rstrip("0").rstrip(".")
         else:  # USD
             if value >= 1:
                 return f"{value:,.2f}"
@@ -42,20 +42,18 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
 # =============================
 async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode="USD", vnd_rate=None):
     try:
-        signal = await analyze_coin_signal(coin)   # FIX: thêm await
+        signal = await analyze_coin_signal(coin)
 
         entry_price = format_price(signal["entry"], currency_mode, vnd_rate)
-        tp_price = format_price(signal["tp"], currency_mode, vnd_rate)   # FIX: lấy trực tiếp từ signal
+        tp_price = format_price(signal["tp"], currency_mode, vnd_rate)
         sl_price = format_price(signal["sl"], currency_mode, vnd_rate)
 
-        # Hiển thị symbol + side
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.lower()}")
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
         highlight = "⭐" if signal["strength"] >= 70 else ""
 
-        # Trend coin
         trend_name = coin.get("trend", "Khác")
-        trade_style = mode.upper()  # SCALPING hoặc SWING
+        trade_style = mode.upper()
 
         msg = (
             f"{highlight}📈 {symbol_display}\n"
@@ -113,7 +111,13 @@ async def job_trade_signals(_=None):
                 )
                 return
 
-        coins = await detect_trend(limit=5)  # lọc coin mạnh theo trend
+        coins = await detect_trend(limit=5)
+
+        # Debug log
+        print(f"[DEBUG] detect_trend result: {len(coins)} coins")
+        for c in coins:
+            print(f" -> {c['symbol']} | vol={c['volume']} | change={c['change_pct']}")
+
         if not coins:
             await bot.send_message(
                 chat_id=S.TELEGRAM_ALLOWED_USER_ID,
@@ -148,16 +152,16 @@ def register_daily_jobs(job_queue):
     # Báo cáo tối
     job_queue.run_daily(job_evening_summary, time=time(hour=22, minute=0, tzinfo=tz), name="evening_report")
 
-    # Lặp tín hiệu 30 phút
+    # Lặp tín hiệu 30 phút (06:15 -> 21:45)
     job_queue.run_repeating(
         job_trade_signals_notice,
-        interval=1800,  # 30 phút
-        first=60,       # FIX: chạy ngay sau 60s, thay vì cố định 6:14
+        interval=1800,    # 30 phút
+        first=time(hour=6, minute=14, tzinfo=tz),
         name="signal_notice"
     )
     job_queue.run_repeating(
         job_trade_signals,
-        interval=1800,  # 30 phút
-        first=120,      # FIX: chạy ngay sau 120s, thay vì cố định 6:15
+        interval=1800,    # 30 phút
+        first=time(hour=6, minute=15, tzinfo=tz),
         name="trade_signals"
     )
