@@ -1,3 +1,4 @@
+# autiner_bot/jobs/daily_reports.py
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
@@ -5,7 +6,7 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top20_futures,
-    get_funding_rate,
+    get_market_funding_volume,
 )
 
 import pytz
@@ -31,11 +32,6 @@ async def get_market_overview():
                 "top5": []
             }
 
-        # Tính volume
-        total_volume = sum([c.get("volume", 0) for c in coins])
-        total_volume_bil = total_volume / 1e9  # đổi sang tỷ USD
-
-        # Tính long/short giả lập (dựa trên thay đổi %)
         ups = [c for c in coins if c.get("change_pct", 0) > 0]
         downs = [c for c in coins if c.get("change_pct", 0) < 0]
 
@@ -46,22 +42,19 @@ async def get_market_overview():
             long_pct = round(len(ups) / total * 100, 1)
             short_pct = round(len(downs) / total * 100, 1)
 
-        # Xu hướng chung = tổng % thay đổi giá
         avg_change = sum([c.get("change_pct", 0) for c in coins]) / len(coins)
         trend = "📈 Tăng" if avg_change > 0 else "📉 Giảm"
 
-        # Funding (lấy BTC làm đại diện)
-        funding = await get_funding_rate("BTC_USDT")
+        market_data = await get_market_funding_volume()
 
-        # Top 5 coin nổi bật theo % biến động
         top5 = sorted(coins, key=lambda x: abs(x.get("change_pct", 0)), reverse=True)[:5]
 
         return {
             "long": long_pct,
             "short": short_pct,
             "trend": trend,
-            "funding": f"{funding:.4f}%" if funding else "N/A",
-            "volume": f"{total_volume_bil:.1f}B",
+            "funding": market_data["funding"],
+            "volume": market_data["volume"],
             "top5": top5
         }
     except Exception as e:
@@ -81,7 +74,6 @@ async def job_morning_message(_=None):
 
         vnd_rate = await get_usdt_vnd_rate()
         market = await get_market_overview()
-
         today = get_vietnam_time().strftime("%A, %d/%m/%Y")
 
         msg = (
@@ -96,7 +88,7 @@ async def job_morning_message(_=None):
         )
 
         for c in market["top5"]:
-            msg += f" • {c['symbol'].replace('_USDT','/USDT')} |  {c['change_pct']:+.2f}%\n"
+            msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
 
         msg += "\n⏳ Trong 15 phút nữa sẽ có tín hiệu. Chuẩn bị sẵn sàng để vào lệnh nhé! 🚀"
 
@@ -117,7 +109,6 @@ async def job_evening_summary(_=None):
 
         vnd_rate = await get_usdt_vnd_rate()
         market = await get_market_overview()
-
         today = get_vietnam_time().strftime("%A, %d/%m/%Y")
 
         msg = (
@@ -132,7 +123,7 @@ async def job_evening_summary(_=None):
         )
 
         for c in market["top5"]:
-            msg += f" • {c['symbol'].replace('_USDT','/USDT')} |  {c['change_pct']:+.2f}%\n"
+            msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
 
         msg += "\n📊 Hiệu suất lệnh sẽ được tổng hợp trong bản nâng cấp sau. 🚀"
 
