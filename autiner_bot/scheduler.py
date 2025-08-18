@@ -31,10 +31,8 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             value = value * vnd_rate
 
             if value >= 1_000_000:  
-                # số lớn: chỉ lấy nguyên, có dấu chấm ngăn cách
                 return f"{round(value):,}".replace(",", ".")
             else:
-                # số nhỏ: vẫn format với dấu chấm ngăn cách và giữ 2 số thập phân
                 s = f"{value:,.2f}"
                 return s.replace(",", ".")
         else:  # USD
@@ -74,13 +72,13 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
     try:
         signal = await analyze_coin_signal_v2(coin)
 
-        # Nếu dữ liệu = 0 => trả về None để bỏ qua
-        if not signal or signal["entry"] <= 0 or signal["tp"] <= 0 or signal["sl"] <= 0:
+        # Nếu entry không có giá trị hợp lệ → bỏ qua
+        if not signal or signal["entry"] <= 0:
             return None
 
         entry_price = format_price(signal["entry"], currency_mode, vnd_rate)
-        tp_price = format_price(signal["tp"], currency_mode, vnd_rate)
-        sl_price = format_price(signal["sl"], currency_mode, vnd_rate)
+        tp_price = format_price(signal["tp"] if signal["tp"] > 0 else signal["entry"] * 1.01, currency_mode, vnd_rate)
+        sl_price = format_price(signal["sl"] if signal["sl"] > 0 else signal["entry"] * 0.99, currency_mode, vnd_rate)
 
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
@@ -113,7 +111,7 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
 
 
 # =============================
-# Gửi tín hiệu giao dịch
+# Gửi tín hiệu giao dịch (ĐÃ FIX)
 # =============================
 async def job_trade_signals(_=None):
     global _last_selected
@@ -177,14 +175,21 @@ async def job_trade_signals(_=None):
                 mode = "SCALPING" if i < 3 else "SWING"
                 msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
 
+                # Nếu coin lỗi → thử thay thế cho đến khi có msg
                 if not msg:
-                    print(f"[WARNING] Bỏ qua {coin['symbol']} vì dữ liệu giá không hợp lệ")
-                    # chọn coin thay thế
-                    if remaining:
+                    print(f"[WARNING] {coin['symbol']} lỗi dữ liệu, thử coin khác...")
+                    while remaining and not msg:
                         new_coin = remaining.pop(0)
-                        print(f"[INFO] Thay thế bằng {new_coin['symbol']}")
                         msg = await create_trade_signal(new_coin, mode, currency_mode, vnd_rate)
 
+                    # fallback cuối cùng: gửi cảnh báo thay vì bỏ qua
+                    if not msg:
+                        msg = (
+                            f"⚠️ Không đủ dữ liệu cho {coin['symbol']}, "
+                            f"tạm giữ giá hiện tại {coin['lastPrice']}"
+                        )
+
+                # Gửi tín hiệu
                 if msg:
                     await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
                     sent_count += 1
