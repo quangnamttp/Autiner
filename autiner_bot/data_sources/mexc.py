@@ -200,7 +200,7 @@ async def fetch_klines(symbol: str, limit: int = 100):
 
 
 # =============================
-# Signal Generator
+# Signal Generator V2
 # =============================
 async def analyze_coin_signal_v2(coin: dict) -> dict:
     """Phân tích tín hiệu: RSI + MA + Volume + lọc coin rác"""
