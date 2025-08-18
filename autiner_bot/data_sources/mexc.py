@@ -100,9 +100,9 @@ async def get_market_funding_volume():
 
 
 # =============================
-# Top Futures
+# Top Futures (lọc giá + volume)
 # =============================
-async def get_top20_futures(limit: int = 20):
+async def get_top20_futures(limit: int = 20, min_price: float = 0.01, min_volume: float = 100000):
     try:
         url = "https://contract.mexc.com/api/v1/contract/ticker"
         async with aiohttp.ClientSession() as session:
@@ -112,12 +112,20 @@ async def get_top20_futures(limit: int = 20):
                 for c in data["data"]:
                     if not c["symbol"].endswith("_USDT"):
                         continue
-                    if not c.get("lastPrice") or float(c.get("lastPrice", 0)) <= 0:
+
+                    last_price = float(c.get("lastPrice", 0))
+                    volume = float(c.get("volume", 0))
+
+                    # Bộ lọc giá & volume
+                    if last_price < min_price:
                         continue
+                    if volume < min_volume:
+                        continue
+
                     filtered.append({
                         "symbol": c["symbol"],
-                        "lastPrice": float(c.get("lastPrice", 0)),
-                        "volume": float(c.get("volume", 0)),
+                        "lastPrice": last_price,
+                        "volume": volume,
                         "change_pct": float(c.get("riseFallRate", 0))
                     })
                 return sorted(filtered, key=lambda x: x["volume"], reverse=True)[:limit]
@@ -163,7 +171,7 @@ async def fetch_klines(symbol: str, limit: int = 100):
 
 
 # =============================
-# Phân tích tín hiệu V3 (chuẩn RSI + MA + Volume)
+# Phân tích tín hiệu V3 (RSI + MA + Volume)
 # =============================
 async def analyze_coin_signal_v2(coin: dict) -> dict:
     symbol = coin["symbol"]
@@ -189,7 +197,7 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     else:
         side = "LONG" if change_pct >= 0 else "SHORT"
 
-    # Đảo chiều khi đủ RSI + MA + Volume
+    # Đảo chiều khi RSI cực đoan + volume lớn
     if side == "LONG":
         if rsi > 75 and ma5 < ma20 and volume > 10_000_000:
             side = "SHORT"
