@@ -66,7 +66,13 @@ async def mexc_private_request(endpoint: str, method="GET", params=None):
 
 async def get_account_info():
     """Lấy balance USDT Futures"""
-    return await mexc_private_request("/api/v1/private/account/assets/USDT", method="GET")
+    data = await mexc_private_request("/api/v1/private/account/assets", method="GET")
+    if not data or "data" not in data:
+        return None
+    for asset in data["data"]:
+        if asset.get("currency") == "USDT":
+            return asset
+    return None
 
 
 # ==============================
@@ -74,8 +80,8 @@ async def get_account_info():
 # ==============================
 def normalize_symbol(symbol: str) -> str:
     if not symbol.endswith("_UMCBL"):
-        return symbol.replace("_USDT", "_USDT_UMCBL")
-    return symbol
+        return symbol.upper().replace("_USDT", "_USDT_UMCBL")
+    return symbol.upper()
 
 
 # =============================
@@ -140,7 +146,7 @@ async def get_market_funding_volume():
 
 
 async def get_top20_futures(limit: int = 20):
-    """Top 20 futures theo volume (loại coin rác giá < 0.01)"""
+    """Top futures theo volume (lọc coin rác)"""
     try:
         url = f"{MEXC_BASE_URL}/api/v1/contract/ticker"
         async with aiohttp.ClientSession() as session:
@@ -151,12 +157,13 @@ async def get_top20_futures(limit: int = 20):
                     if not c["symbol"].endswith("_USDT"):
                         continue
                     last_price = float(c.get("lastPrice", 0))
-                    if last_price < 0.01:  # loại coin rác
+                    volume = float(c.get("volume", 0))
+                    if last_price < 0.01 or volume < 100000:
                         continue
                     filtered.append({
                         "symbol": c["symbol"],
                         "lastPrice": last_price,
-                        "volume": float(c.get("volume", 0)),
+                        "volume": volume,
                         "change_pct": float(c.get("riseFallRate", 0))
                     })
                 return sorted(filtered, key=lambda x: x["volume"], reverse=True)[:limit]
@@ -203,37 +210,29 @@ async def fetch_klines(symbol: str, limit: int = 100):
 # Signal Generator V2
 # =============================
 async def analyze_coin_signal_v2(coin: dict) -> dict:
-    """Phân tích tín hiệu: RSI + MA + Volume + lọc coin rác"""
+    """Phân tích tín hiệu: RSI + MA + Volume"""
     symbol = coin["symbol"]
     last_price = coin["lastPrice"]
     change_pct = coin["change_pct"]
     volume = coin.get("volume", 0)
 
-    # Lọc coin rác
-    if last_price < 0.01:
-        return {"symbol": symbol, "direction": "N/A", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Coin rác < 0.01"}
+    if last_price < 0.01 or volume < 100000:
+        return {"symbol": symbol, "direction": "N/A", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Coin rác / volume thấp"}
 
     closes = await fetch_klines(symbol, limit=100)
     if not closes or len(closes) < 20:
         return {"symbol": symbol, "direction": "N/A", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Không đủ dữ liệu Kline"}
 
-    # Indicators
     rsi = calculate_rsi(closes, 14)
     ma5, ma20 = np.mean(closes[-5:]), np.mean(closes[-20:])
-
-    # Trend chính
     trend = "LONG" if change_pct >= 0 and ma5 >= ma20 else "SHORT"
     side = trend
 
-    # Ngược trend → cần đủ 3 yếu tố RSI cực đoan + MA đảo chiều + Volume >= 30M
-    if trend == "LONG":
-        if rsi > 75 and ma5 < ma20 and volume >= 30_000_000:
-            side = "SHORT"
-    elif trend == "SHORT":
-        if rsi < 25 and ma5 > ma20 and volume >= 30_000_000:
-            side = "LONG"
+    if trend == "LONG" and rsi > 75 and ma5 < ma20 and volume >= 30_000_000:
+        side = "SHORT"
+    elif trend == "SHORT" and rsi < 25 and ma5 > ma20 and volume >= 30_000_000:
+        side = "LONG"
 
-    # ATR để tính TP/SL
     highs = np.array(closes[-20:]) * 1.002
     lows = np.array(closes[-20:]) * 0.998
     tr = np.maximum(highs - lows, np.abs(highs - closes[-2]), np.abs(lows - closes[-2]))
@@ -248,26 +247,26 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     # =============================
     # Strength scoring
     # =============================
-    strength = 50  # mặc định trung tính
-
-    # Biến động mạnh
+    strength = 50
     if abs(change_pct) > 3:
-        strength += 10  
-
-    # Volume cao
+        strength += 10
     if volume > 10_000_000:
-        strength += 10  
-
-    # RSI hỗ trợ theo hướng side
+        strength += 10
     if side == "LONG" and rsi < 30:
         strength += 15
     if side == "SHORT" and rsi > 70:
         strength += 15
 
-    # Giới hạn 100
-    strength = min(100, strength)
+    # giảm nếu sideways
+    ma_diff = abs(ma5 - ma20) / ma20 * 100
+    if ma_diff < 0.3:
+        strength -= 15
+        reason_note = " | ⚠️ Sideways (MA5≈MA20)"
+    else:
+        reason_note = ""
 
-    # Phân loại tín hiệu
+    strength = min(100, max(0, strength))
+
     if strength >= 70:
         label = "⭐ Tín hiệu mạnh"
     elif strength >= 55:
@@ -283,5 +282,5 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
         "tp": round(tp_price, 4),
         "sl": round(sl_price, 4),
         "strength": strength,
-        "reason": f"{label} | RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f} | Δ {change_pct:.2f}% | Vol {volume:,} | Trend={trend}"
+        "reason": f"{label} | RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f} | Δ {change_pct:.2f}% | Vol {volume:,} | Trend={trend}{reason_note}"
     }
