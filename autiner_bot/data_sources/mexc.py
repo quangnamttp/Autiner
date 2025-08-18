@@ -91,77 +91,96 @@ async def get_market_sentiment():
 
 
 # =============================
-# Phân tích tín hiệu
+# Signal Generator V2
 # =============================
 async def analyze_coin_signal_v2(coin: dict) -> dict:
-    try:
-        symbol = coin["symbol"]
-        last_price = coin["lastPrice"]
-        change_pct = coin["change_pct"]
-        volume = coin.get("volume", 0)
+    """Phân tích tín hiệu: RSI + MA + Volume (luôn trả về)"""
+    symbol = coin["symbol"]
+    last_price = coin["lastPrice"]
+    change_pct = coin["change_pct"]
+    volume = coin.get("volume", 0)
 
-        # Lọc coin rác
-        if last_price < 0.01:
-            return {"symbol": symbol, "direction": "N/A", "entry": 0,
-                    "tp": 0, "sl": 0, "strength": 0,
-                    "orderType": "MARKET", "reason": "⚠️ Coin rác < 0.01"}
+    # Nếu coin quá rác thì vẫn cho tín hiệu nhưng cảnh báo
+    if last_price < 0.001:
+        return {
+            "symbol": symbol,
+            "direction": "N/A",
+            "entry": last_price,
+            "tp": last_price,
+            "sl": last_price,
+            "strength": 10,
+            "orderType": "MARKET",
+            "reason": "⚠️ Coin rác giá <0.001"
+        }
 
-        closes = await fetch_klines(symbol, limit=100)
-        if not closes or len(closes) < 20:
-            return {"symbol": symbol, "direction": "N/A", "entry": 0,
-                    "tp": 0, "sl": 0, "strength": 0,
-                    "orderType": "MARKET", "reason": "⚠️ Không đủ dữ liệu Kline"}
+    closes = await fetch_klines(symbol, limit=100)
 
-        # Indicators
-        rsi = calculate_rsi(closes, 14)
-        ma5, ma20 = np.mean(closes[-5:]), np.mean(closes[-20:])
-
-        # Trend chính
-        trend = "LONG" if change_pct >= 0 and ma5 >= ma20 else "SHORT"
-        side = trend
-
-        # Ngược trend cần đủ 3 yếu tố
-        if trend == "LONG":
-            if rsi > 75 and ma5 < ma20 and volume >= 30_000_000:
-                side = "SHORT"
-        elif trend == "SHORT":
-            if rsi < 25 and ma5 > ma20 and volume >= 30_000_000:
-                side = "LONG"
-
-        # ATR
-        highs = np.array(closes[-20:]) * 1.002
-        lows = np.array(closes[-20:]) * 0.998
-        tr = np.maximum(highs - lows,
-                        np.abs(highs - closes[-2]),
-                        np.abs(lows - closes[-2]))
-        atr = np.mean(tr) if len(tr) > 0 else last_price * 0.005
-
-        entry_price = last_price
-        if side == "LONG":
-            tp_price, sl_price = entry_price + 2 * atr, entry_price - 1 * atr
-        else:
-            tp_price, sl_price = entry_price - 2 * atr, entry_price + 1 * atr
-
-        # Strength
-        strength = 50
-        if side == trend:
-            strength += 20
-        if volume > 50_000_000:
-            strength += 15
-        if (side == "LONG" and rsi < 70) or (side == "SHORT" and rsi > 30):
-            strength += 10
-
+    # Nếu thiếu dữ liệu Kline → vẫn trả về tín hiệu yếu
+    if not closes or len(closes) < 20:
+        side = "LONG" if change_pct >= 0 else "SHORT"
         return {
             "symbol": symbol,
             "direction": side,
-            "entry": entry_price,
-            "tp": tp_price,
-            "sl": sl_price,
-            "strength": min(strength, 100),
+            "entry": round(last_price, 4),
+            "tp": round(last_price * (1.01 if side == "LONG" else 0.99), 4),
+            "sl": round(last_price * (0.99 if side == "LONG" else 1.01), 4),
+            "strength": 40,
             "orderType": "MARKET",
-            "reason": f"RSI={rsi:.1f}, MA5={ma5:.2f}, MA20={ma20:.2f}, Vol={volume/1e6:.1f}M"
+            "reason": "⚠️ Thiếu dữ liệu Kline - chỉ gợi ý tham khảo"
         }
-    except Exception as e:
-        print(f"[ERROR] analyze_coin_signal_v2({coin}): {e}")
-        print(traceback.format_exc())
-        return None
+
+    # Nếu có dữ liệu đủ thì tính RSI + MA
+    rsi = calculate_rsi(closes, 14)
+    ma5, ma20 = np.mean(closes[-5:]), np.mean(closes[-20:])
+    trend = "LONG" if change_pct >= 0 and ma5 >= ma20 else "SHORT"
+    side = trend
+
+    highs = np.array(closes[-20:]) * 1.002
+    lows = np.array(closes[-20:]) * 0.998
+    tr = np.maximum(highs - lows, np.abs(highs - closes[-2]), np.abs(lows - closes[-2]))
+    atr = np.mean(tr) if len(tr) > 0 else last_price * 0.005
+
+    entry_price = last_price
+    if side == "LONG":
+        tp_price, sl_price = entry_price + 2 * atr, entry_price - 1 * atr
+    else:
+        tp_price, sl_price = entry_price - 2 * atr, entry_price + 1 * atr
+
+    # =============================
+    # Strength scoring
+    # =============================
+    strength = 50
+    if abs(change_pct) > 3:
+        strength += 10
+    if volume > 5_000_000:   # hạ ngưỡng volume
+        strength += 10
+    if side == "LONG" and rsi < 30:
+        strength += 15
+    if side == "SHORT" and rsi > 70:
+        strength += 15
+
+    ma_diff = abs(ma5 - ma20) / ma20 * 100
+    reason_note = ""
+    if ma_diff < 0.3:
+        strength -= 15
+        reason_note = " | ⚠️ Sideways (MA5≈MA20)"
+
+    strength = min(100, max(0, strength))
+
+    if strength >= 70:
+        label = "⭐ Tín hiệu mạnh"
+    elif strength >= 55:
+        label = "Tín hiệu"
+    else:
+        label = "Tham khảo"
+
+    return {
+        "symbol": symbol,
+        "direction": side,
+        "orderType": "MARKET",
+        "entry": round(entry_price, 4),
+        "tp": round(tp_price, 4),
+        "sl": round(sl_price, 4),
+        "strength": strength,
+        "reason": f"{label} | RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f} | Δ {change_pct:.2f}% | Vol {volume:,} | Trend={trend}{reason_note}"
+    }
