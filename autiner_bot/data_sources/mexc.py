@@ -9,15 +9,15 @@ async def safe_get_json(url: str, session, method="GET", payload=None, headers=N
     try:
         if method == "POST":
             async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
-                text = await resp.text()
                 if resp.status != 200:
+                    text = await resp.text()
                     print(f"[HTTP ERROR] {url} → {resp.status} | {text[:200]}")
                     return None
                 return await resp.json()
         else:
             async with session.get(url, headers=headers, timeout=10) as resp:
-                text = await resp.text()
                 if resp.status != 200:
+                    text = await resp.text()
                     print(f"[HTTP ERROR] {url} → {resp.status} | {text[:200]}")
                     return None
                 return await resp.json()
@@ -100,9 +100,9 @@ async def get_market_funding_volume():
 
 
 # =============================
-# Top Futures (lọc giá + volume)
+# Top Futures (lọc giá < 0.01)
 # =============================
-async def get_top20_futures(limit: int = 20, min_price: float = 0.01, min_volume: float = 100000):
+async def get_top20_futures(limit: int = 20, min_price: float = 0.01):
     try:
         url = "https://contract.mexc.com/api/v1/contract/ticker"
         async with aiohttp.ClientSession() as session:
@@ -116,10 +116,8 @@ async def get_top20_futures(limit: int = 20, min_price: float = 0.01, min_volume
                     last_price = float(c.get("lastPrice", 0))
                     volume = float(c.get("volume", 0))
 
-                    # Bộ lọc giá & volume
+                    # Bộ lọc giá
                     if last_price < min_price:
-                        continue
-                    if volume < min_volume:
                         continue
 
                     filtered.append({
@@ -171,7 +169,7 @@ async def fetch_klines(symbol: str, limit: int = 100):
 
 
 # =============================
-# Phân tích tín hiệu V3 (RSI + MA + Volume)
+# Phân tích tín hiệu (RSI + MA + Volume)
 # =============================
 async def analyze_coin_signal_v2(coin: dict) -> dict:
     symbol = coin["symbol"]
@@ -180,11 +178,15 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     volume = coin.get("volume", 0)
 
     if last_price <= 0:
-        return {"symbol": symbol, "direction": "LONG", "orderType": "MARKET", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Không có dữ liệu giá hợp lệ"}
+        return {"symbol": symbol, "direction": "LONG", "orderType": "MARKET",
+                "entry": 0, "tp": 0, "sl": 0, "strength": 0,
+                "reason": "⚠️ Không có dữ liệu giá hợp lệ"}
 
     closes = await fetch_klines(symbol, limit=100)
     if not closes or len(closes) < 20:
-        return {"symbol": symbol, "direction": "LONG", "orderType": "MARKET", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Không có dữ liệu Kline"}
+        return {"symbol": symbol, "direction": "LONG", "orderType": "MARKET",
+                "entry": 0, "tp": 0, "sl": 0, "strength": 0,
+                "reason": "⚠️ Không có dữ liệu Kline"}
 
     rsi = calculate_rsi(closes, 14)
     ma5, ma20 = np.mean(closes[-5:]), np.mean(closes[-20:])
@@ -197,13 +199,11 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     else:
         side = "LONG" if change_pct >= 0 else "SHORT"
 
-    # Đảo chiều khi RSI cực đoan + volume lớn
-    if side == "LONG":
-        if rsi > 75 and ma5 < ma20 and volume > 10_000_000:
-            side = "SHORT"
-    elif side == "SHORT":
-        if rsi < 25 and ma5 > ma20 and volume > 10_000_000:
-            side = "LONG"
+    # Đảo chiều khi RSI cực đoan
+    if side == "LONG" and rsi > 75 and ma5 < ma20:
+        side = "SHORT"
+    elif side == "SHORT" and rsi < 25 and ma5 > ma20:
+        side = "LONG"
 
     # ATR → TP/SL
     highs = np.array(closes[-20:]) * 1.002
@@ -223,8 +223,8 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
         strength += 10
     if volume > 10_000_000:
         strength += 10
-    if (side == "LONG" and rsi < 25 and ma5 > ma20 and volume > 10_000_000) or \
-       (side == "SHORT" and rsi > 75 and ma5 < ma20 and volume > 10_000_000):
+    if (side == "LONG" and rsi < 25 and ma5 > ma20) or \
+       (side == "SHORT" and rsi > 75 and ma5 < ma20):
         strength += 15
     strength = min(100, strength)
 
@@ -236,5 +236,6 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
         "tp": round(tp_price, 4),
         "sl": round(sl_price, 4),
         "strength": strength,
-        "reason": f"RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f} | Biến động {change_pct:.2f}% | Volume {volume:,}"
+        "reason": f"RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f} "
+                  f"| Biến động {change_pct:.2f}% | Volume {volume:,}"
     }
