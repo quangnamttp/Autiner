@@ -30,7 +30,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
                 return "N/A VND"
             value = value * vnd_rate
 
-            if value >= 1_000_000:  
+            if value >= 1_000_000:
                 return f"{round(value):,}".replace(",", ".")
             else:
                 s = f"{value:,.2f}"
@@ -111,7 +111,7 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
 
 
 # =============================
-# Gửi tín hiệu giao dịch (ĐÃ FIX)
+# Gửi tín hiệu giao dịch (KHÔNG fallback)
 # =============================
 async def job_trade_signals(_=None):
     global _last_selected
@@ -175,24 +175,14 @@ async def job_trade_signals(_=None):
                 mode = "SCALPING" if i < 3 else "SWING"
                 msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
 
-                # Nếu coin lỗi → thử thay thế cho đến khi có msg
+                # Nếu coin lỗi dữ liệu → bỏ qua, không fallback
                 if not msg:
-                    print(f"[WARNING] {coin['symbol']} lỗi dữ liệu, thử coin khác...")
-                    while remaining and not msg:
-                        new_coin = remaining.pop(0)
-                        msg = await create_trade_signal(new_coin, mode, currency_mode, vnd_rate)
-
-                    # fallback cuối cùng: gửi cảnh báo thay vì bỏ qua
-                    if not msg:
-                        msg = (
-                            f"⚠️ Không đủ dữ liệu cho {coin['symbol']}, "
-                            f"tạm giữ giá hiện tại {coin['lastPrice']}"
-                        )
+                    print(f"[WARNING] Bỏ qua {coin['symbol']} do không đủ dữ liệu.")
+                    continue
 
                 # Gửi tín hiệu
-                if msg:
-                    await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
-                    sent_count += 1
+                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+                sent_count += 1
 
             except Exception as e:
                 print(f"[ERROR] gửi tín hiệu coin {coin.get('symbol')}: {e}")
