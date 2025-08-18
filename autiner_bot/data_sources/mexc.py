@@ -118,7 +118,7 @@ async def fetch_klines(symbol: str, limit: int = 100):
 # =============================
 # Top Futures (lọc kỹ: giá, volume, kline)
 # =============================
-async def get_top20_futures(limit: int = 20, min_price: float = 0.01, min_volume: float = 5_000_000):
+async def get_top20_futures(limit: int = 20, min_price: float = 0.01, min_volume: float = 100_000):
     try:
         url = "https://contract.mexc.com/api/v1/contract/ticker"
         async with aiohttp.ClientSession() as session:
