@@ -7,7 +7,6 @@ from autiner_bot.settings import S
 # Chuẩn hóa symbol cho Futures
 # =============================
 def normalize_symbol(symbol: str) -> str:
-    # MEXC Futures chuẩn USDT-M: BTC_USDT_UMCBL
     if not symbol.endswith("_UMCBL"):
         return symbol.replace("_USDT", "_USDT_UMCBL")
     return symbol
@@ -19,30 +18,20 @@ def normalize_symbol(symbol: str) -> str:
 async def get_usdt_vnd_rate():
     try:
         url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-        payload = {
-            "asset": "USDT",
-            "fiat": "VND",
-            "tradeType": "BUY",
-            "page": 1,
-            "rows": 1,
-            "payTypes": []
-        }
+        payload = {"asset": "USDT", "fiat": "VND", "tradeType": "BUY", "page": 1, "rows": 1, "payTypes": []}
         headers = {"Content-Type": "application/json"}
-
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
                 data = await resp.json()
                 if "data" in data and len(data["data"]) > 0:
-                    price = float(data["data"][0]["adv"]["price"])
-                    return price
+                    return float(data["data"][0]["adv"]["price"])
     except Exception as e:
         print(f"[ERROR] get_usdt_vnd_rate (Binance): {e}")
-
     return 25000.0
 
 
 # =============================
-# Sentiment thị trường (Long/Short theo volume)
+# Sentiment thị trường
 # =============================
 async def get_market_sentiment():
     try:
@@ -52,37 +41,26 @@ async def get_market_sentiment():
                 data = await resp.json()
                 if data.get("success") and "data" in data:
                     coins = data["data"]
-
-                    long_vol = 0
-                    short_vol = 0
-
+                    long_vol, short_vol = 0, 0
                     for c in coins:
                         if not c["symbol"].endswith("_USDT"):
                             continue
                         vol = float(c.get("volume", 0))
                         change_pct = float(c.get("riseFallRate", 0))
-
                         if change_pct >= 0:
                             long_vol += vol
                         else:
                             short_vol += vol
-
                     total = long_vol + short_vol
                     if total > 0:
-                        long_pct = (long_vol / total) * 100
-                        short_pct = (short_vol / total) * 100
-                    else:
-                        long_pct, short_pct = 50.0, 50.0
-
-                    return {"long": round(long_pct, 2), "short": round(short_pct, 2)}
+                        return {"long": round(long_vol / total * 100, 2), "short": round(short_vol / total * 100, 2)}
     except Exception as e:
         print(f"[ERROR] get_market_sentiment: {e}")
-
     return {"long": 50.0, "short": 50.0}
 
 
 # =============================
-# Funding + Volume (trung bình & tổng)
+# Funding + Volume
 # =============================
 async def get_market_funding_volume():
     try:
@@ -92,26 +70,17 @@ async def get_market_funding_volume():
                 data = await resp.json()
                 if data.get("success") and "data" in data:
                     all_data = data["data"]
-
-                    # Trung bình funding toàn thị trường
                     rates = [float(c.get("fundingRate", 0)) for c in all_data if "fundingRate" in c]
                     avg_funding = sum(rates) / len(rates) if rates else 0
-
-                    # Tổng volume toàn thị trường
                     total_vol = sum(float(c.get("volume", 0)) for c in all_data if "volume" in c)
-
-                    return {
-                        "funding": f"{avg_funding * 100:.4f}%",
-                        "volume": f"{total_vol:,.0f}",
-                        "trend": "Tăng" if avg_funding > 0 else "Giảm"
-                    }
+                    return {"funding": f"{avg_funding * 100:.4f}%", "volume": f"{total_vol:,.0f}", "trend": "Tăng" if avg_funding > 0 else "Giảm"}
     except Exception as e:
         print(f"[ERROR] get_market_funding_volume: {e}")
     return {"funding": "N/A", "volume": "N/A", "trend": "N/A"}
 
 
 # =============================
-# Top 20 Futures theo Volume
+# Top Futures
 # =============================
 async def get_top20_futures(limit: int = 20):
     try:
@@ -120,44 +89,22 @@ async def get_top20_futures(limit: int = 20):
             async with session.get(url, timeout=10) as resp:
                 data = await resp.json()
                 if data.get("success") and "data" in data:
-                    coins = data["data"]
-
                     filtered = []
-                    for c in coins:
+                    for c in data["data"]:
                         if not c["symbol"].endswith("_USDT"):
                             continue
                         if not c.get("lastPrice") or float(c.get("lastPrice", 0)) <= 0:
                             continue
-                        volume = float(c.get("volume", 0))
-                        change_pct = float(c.get("riseFallRate", 0))
                         filtered.append({
                             "symbol": c["symbol"],
                             "lastPrice": float(c.get("lastPrice", 0)),
-                            "volume": volume,
-                            "change_pct": change_pct
+                            "volume": float(c.get("volume", 0)),
+                            "change_pct": float(c.get("riseFallRate", 0))
                         })
-
-                    sorted_coins = sorted(filtered, key=lambda x: x["volume"], reverse=True)
-                    return sorted_coins[:limit]
+                    return sorted(filtered, key=lambda x: x["volume"], reverse=True)[:limit]
     except Exception as e:
         print(f"[ERROR] get_top20_futures: {e}")
-
     return []
-
-
-# =============================
-# Detect trend (top coin mạnh nhất)
-# =============================
-async def detect_trend(limit: int = 5):
-    try:
-        coins = await get_top20_futures(limit=20)
-        if not coins:
-            return []
-        sorted_by_change = sorted(coins, key=lambda x: abs(x["change_pct"]), reverse=True)
-        return sorted_by_change[:limit]
-    except Exception as e:
-        print(f"[ERROR] detect_trend: {e}")
-        return []
 
 
 # =============================
@@ -180,7 +127,7 @@ def calculate_rsi(prices, period: int = 14) -> float:
 
 
 # =============================
-# Lấy dữ liệu Kline
+# Kline
 # =============================
 async def fetch_klines(symbol: str, limit: int = 100):
     sym = normalize_symbol(symbol)
@@ -190,15 +137,14 @@ async def fetch_klines(symbol: str, limit: int = 100):
             async with session.get(url, timeout=10) as resp:
                 data = await resp.json()
                 if data.get("success") and "data" in data and data["data"]:
-                    closes = [float(c[4]) for c in data["data"]]
-                    return closes[-limit:]
+                    return [float(c[4]) for c in data["data"]][-limit:]
     except Exception as e:
         print(f"[ERROR] fetch_klines {symbol}: {e}")
     return []
 
 
 # =============================
-# Lấy giá fallback (fair price)
+# Giá fallback
 # =============================
 async def fetch_last_price(symbol: str) -> float:
     sym = normalize_symbol(symbol)
@@ -215,7 +161,7 @@ async def fetch_last_price(symbol: str) -> float:
 
 
 # =============================
-# Phân tích tín hiệu V2 (luôn MARKET)
+# Phân tích tín hiệu V2
 # =============================
 async def analyze_coin_signal_v2(coin: dict) -> dict:
     symbol = coin["symbol"]
@@ -224,16 +170,7 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     volume = coin.get("volume", 0)
 
     if last_price <= 0:
-        return {
-            "symbol": symbol,
-            "direction": "LONG",
-            "orderType": "MARKET",
-            "entry": 0,
-            "tp": 0,
-            "sl": 0,
-            "strength": 0,
-            "reason": "⚠️ Không có dữ liệu giá hợp lệ"
-        }
+        return {"symbol": symbol, "direction": "LONG", "orderType": "MARKET", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Không có dữ liệu giá hợp lệ"}
 
     closes = await fetch_klines(symbol, limit=100)
     if not closes or len(closes) < 20:
@@ -242,80 +179,57 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
             closes = [last_fallback] * 30
             last_price = last_fallback
         else:
-            return {
-                "symbol": symbol,
-                "direction": "LONG",
-                "orderType": "MARKET",
-                "entry": 0,
-                "tp": 0,
-                "sl": 0,
-                "strength": 0,
-                "reason": "⚠️ Không có dữ liệu Kline hoặc giá fallback"
-            }
+            return {"symbol": symbol, "direction": "LONG", "orderType": "MARKET", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Không có dữ liệu Kline hoặc giá fallback"}
 
     rsi = calculate_rsi(closes, 14)
-    if rsi > 70:
-        rsi_signal = "QUÁ MUA"
-    elif rsi < 30:
-        rsi_signal = "QUÁ BÁN"
-    else:
-        rsi_signal = "TRUNG LẬP"
+    ma5, ma20 = np.mean(closes[-5:]), np.mean(closes[-20:])
 
-    ma5 = np.mean(closes[-5:])
-    ma20 = np.mean(closes[-20:])
-    ma_signal = "BUY" if ma5 > ma20 else "SELL"
-
-    # Quy tắc chọn hướng
-    if (rsi < 30 and ma5 > ma20 and change_pct > 0):
+    # ============= LOGIC MỚI =============
+    # Trend chính
+    if change_pct > 0 and ma5 > ma20:
         side = "LONG"
-    elif (rsi > 70 and ma5 < ma20 and change_pct < 0):
+        # Chỉ SHORT ngược khi RSI cực cao + MA5 cắt xuống
+        if rsi > 75 and ma5 < ma20:
+            side = "SHORT"
+    elif change_pct < 0 and ma5 < ma20:
         side = "SHORT"
+        # Chỉ LONG ngược khi RSI cực thấp + MA5 cắt lên
+        if rsi < 25 and ma5 > ma20:
+            side = "LONG"
     else:
         side = "LONG" if change_pct >= 0 else "SHORT"
 
-    # Luôn MARKET
-    order_type = "MARKET"
-    entry_price = last_price
-
-    # ATR để tính TP/SL
-    highs = np.array(closes[-20:]) * (1 + 0.002)
-    lows = np.array(closes[-20:]) * (1 - 0.002)
+    # ATR tính TP/SL
+    highs = np.array(closes[-20:]) * 1.002
+    lows = np.array(closes[-20:]) * 0.998
     tr = np.maximum(highs - lows, np.abs(highs - closes[-2]), np.abs(lows - closes[-2]))
     atr = np.mean(tr) if len(tr) > 0 else last_price * 0.005
 
+    entry_price = last_price
     if side == "LONG":
-        tp_price = entry_price + 2 * atr
-        sl_price = entry_price - 1 * atr
+        tp_price, sl_price = entry_price + 2 * atr, entry_price - 1 * atr
     else:
-        tp_price = entry_price - 2 * atr
-        sl_price = entry_price + 1 * atr
-
-    tp_pct = (tp_price / entry_price - 1) * 100
-    sl_pct = (sl_price / entry_price - 1) * 100
+        tp_price, sl_price = entry_price - 2 * atr, entry_price + 1 * atr
 
     # Strength
-    strength = 50
+    strength = 60
     if abs(change_pct) > 3:
-        strength += 20
+        strength += 15
     if side == "LONG" and rsi < 25 and ma5 > ma20:
         strength += 15
     if side == "SHORT" and rsi > 75 and ma5 < ma20:
         strength += 15
     if volume > 10_000_000:
         strength += 10
-    strength = min(100, max(50, strength))
+    strength = min(100, strength)
 
     return {
         "symbol": symbol,
         "direction": side,
-        "orderType": order_type,
+        "orderType": "MARKET",
         "entry": round(entry_price, 4),
         "tp": round(tp_price, 4),
         "sl": round(sl_price, 4),
-        "tp_pct": round(tp_pct, 2),
-        "sl_pct": round(sl_pct, 2),
         "strength": strength,
-        "reason": f"RSI {rsi_signal} ({rsi:.1f}) | MA {ma_signal} "
-                  f"(MA5={ma5:.4f}, MA20={ma20:.4f}) | ATR={atr:.4f} "
-                  f"| Biến động {change_pct:.2f}% | Volume {volume}"
+        "reason": f"RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f} | Biến động {change_pct:.2f}% | Volume {volume:,}"
     }
