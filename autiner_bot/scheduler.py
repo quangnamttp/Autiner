@@ -6,6 +6,7 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     analyze_coin_signal_v2,
     get_top20_futures,
+    get_market_sentiment,
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -72,7 +73,6 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
     try:
         signal = await analyze_coin_signal_v2(coin)
 
-        # Nếu entry không có giá trị hợp lệ → bỏ qua
         if not signal or signal["entry"] <= 0:
             return None
 
@@ -111,7 +111,7 @@ async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode=
 
 
 # =============================
-# Gửi tín hiệu giao dịch (KHÔNG fallback)
+# Gửi tín hiệu giao dịch (Đồng bộ với daily)
 # =============================
 async def job_trade_signals(_=None):
     global _last_selected
@@ -131,8 +131,10 @@ async def job_trade_signals(_=None):
                 )
                 return
 
-        # Lấy top 20 coin futures
+        # ======== Lấy dữ liệu từ MEXC ========
         all_coins = await get_top20_futures(limit=20)
+        sentiment = await get_market_sentiment()
+
         if not all_coins:
             await bot.send_message(
                 chat_id=S.TELEGRAM_ALLOWED_USER_ID,
@@ -140,49 +142,51 @@ async def job_trade_signals(_=None):
             )
             return
 
-        # Luôn giữ BTC và ETH
+        market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
+
+        # ======== Chọn coin ========
         selected = [c for c in all_coins if c["symbol"] in ["BTC_USDT", "ETH_USDT"]]
 
-        # Ưu tiên coin biến động mạnh (>5%)
-        volatile = [c for c in all_coins if abs(c["change_pct"]) >= 5 and c["symbol"] not in ["BTC_USDT", "ETH_USDT"]]
+        volatile = [c for c in all_coins
+                    if abs(c["change_pct"]) >= 5
+                    and c["symbol"] not in ["BTC_USDT", "ETH_USDT"]]
 
-        # Loại coin đã chọn ở lần trước để tránh lặp
         volatile = [c for c in volatile if c["symbol"] not in _last_selected]
-        remaining = [c for c in all_coins if c["symbol"] not in _last_selected and c["symbol"] not in ["BTC_USDT", "ETH_USDT"]]
+        remaining = [c for c in all_coins
+                     if c["symbol"] not in _last_selected
+                     and c["symbol"] not in ["BTC_USDT", "ETH_USDT"]]
 
-        # Bổ sung coin cho đủ 5
         while len(selected) < 5:
             if volatile:
                 selected.append(volatile.pop(0))
             elif remaining:
-                choice = random.choice(remaining)
-                selected.append(choice)
-                remaining.remove(choice)
+                selected.append(remaining.pop(0))
             else:
-                break  # hết coin thì thoát
+                break
 
-        # Lưu lại lần chọn này (giữ tối đa 10 để tránh bí)
         _last_selected = ([c["symbol"] for c in selected] + _last_selected)[:10]
 
-        print(f"[DEBUG] Selected {len(selected)} coins:")
-        for c in selected:
-            print(f" -> {c['symbol']} | vol={c['volume']} | change={c['change_pct']}")
+        print(f"[DEBUG] Selected {len(selected)} coins with market trend = {market_trend}")
 
-        # 3 Scalping (BTC, ETH, 1 coin khác) + 2 Swing
+        # ======== Gửi tín hiệu ========
         sent_count = 0
         for i, coin in enumerate(selected):
             try:
                 mode = "SCALPING" if i < 3 else "SWING"
-                msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
+                signal = await analyze_coin_signal_v2(coin)
 
-                # Nếu coin lỗi dữ liệu → bỏ qua, không fallback
-                if not msg:
+                if not signal or signal["entry"] <= 0:
                     print(f"[WARNING] Bỏ qua {coin['symbol']} do không đủ dữ liệu.")
                     continue
 
-                # Gửi tín hiệu
-                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
-                sent_count += 1
+                if signal["direction"] != market_trend:
+                    signal["strength"] = max(30, signal["strength"] - 20)
+                    signal["reason"] += f" | ⚠️ Ngược xu hướng {market_trend}"
+
+                msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
+                if msg:
+                    await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+                    sent_count += 1
 
             except Exception as e:
                 print(f"[ERROR] gửi tín hiệu coin {coin.get('symbol')}: {e}")
