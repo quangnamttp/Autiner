@@ -1,7 +1,6 @@
 import aiohttp
 import numpy as np
 
-
 # =============================
 # Helper: gọi API an toàn + log
 # =============================
@@ -100,33 +99,62 @@ async def get_market_funding_volume():
 
 
 # =============================
-# Top Futures (lọc giá < 0.01)
+# Kline
 # =============================
-async def get_top20_futures(limit: int = 20, min_price: float = 0.01):
+async def fetch_klines(symbol: str, limit: int = 100):
+    sym = normalize_symbol(symbol)
+    url = f"https://contract.mexc.com/api/v1/contract/kline/{sym}?interval=Min1&limit={limit}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            data = await safe_get_json(url, session)
+            if not data or not data.get("success") or not data.get("data"):
+                return []
+            return [float(c[4]) for c in data["data"]][-limit:]
+    except Exception as e:
+        print(f"[EXCEPTION] fetch_klines {symbol}: {e}")
+    return []
+
+
+# =============================
+# Top Futures (lọc kỹ: giá, volume, kline)
+# =============================
+async def get_top20_futures(limit: int = 20, min_price: float = 0.01, min_volume: float = 5_000_000):
     try:
         url = "https://contract.mexc.com/api/v1/contract/ticker"
         async with aiohttp.ClientSession() as session:
             data = await safe_get_json(url, session)
-            if data and data.get("success") and "data" in data:
-                filtered = []
-                for c in data["data"]:
-                    if not c["symbol"].endswith("_USDT"):
-                        continue
+            if not data or not data.get("success") or "data" not in data:
+                return []
 
-                    last_price = float(c.get("lastPrice", 0))
-                    volume = float(c.get("volume", 0))
+            coins = []
+            for c in data["data"]:
+                if not c["symbol"].endswith("_USDT"):
+                    continue
 
-                    # Bộ lọc giá
-                    if last_price < min_price:
-                        continue
+                last_price = float(c.get("lastPrice", 0))
+                volume = float(c.get("volume", 0))
 
-                    filtered.append({
-                        "symbol": c["symbol"],
-                        "lastPrice": last_price,
-                        "volume": volume,
-                        "change_pct": float(c.get("riseFallRate", 0))
-                    })
-                return sorted(filtered, key=lambda x: x["volume"], reverse=True)[:limit]
+                # Lọc giá và volume
+                if last_price < min_price:
+                    continue
+                if volume < min_volume:
+                    continue
+
+                # Kiểm tra kline có đủ dữ liệu
+                klines = await fetch_klines(c["symbol"], limit=100)
+                if len(klines) < 50:
+                    continue
+
+                coins.append({
+                    "symbol": c["symbol"],
+                    "lastPrice": last_price,
+                    "volume": volume,
+                    "change_pct": float(c.get("riseFallRate", 0))
+                })
+
+            # Trả về danh sách đã lọc theo volume giảm dần
+            return sorted(coins, key=lambda x: x["volume"], reverse=True)[:limit]
+
     except Exception as e:
         print(f"[ERROR] get_top20_futures: {e}")
     return []
@@ -152,24 +180,7 @@ def calculate_rsi(prices, period: int = 14) -> float:
 
 
 # =============================
-# Kline
-# =============================
-async def fetch_klines(symbol: str, limit: int = 100):
-    sym = normalize_symbol(symbol)
-    url = f"https://contract.mexc.com/api/v1/contract/kline/{sym}?interval=Min1&limit={limit}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            data = await safe_get_json(url, session)
-            if not data or not data.get("success") or not data.get("data"):
-                return []
-            return [float(c[4]) for c in data["data"]][-limit:]
-    except Exception as e:
-        print(f"[EXCEPTION] fetch_klines {symbol}: {e}")
-    return []
-
-
-# =============================
-# Phân tích tín hiệu (RSI + MA + Volume)
+# Phân tích tín hiệu (RSI + MA + ATR)
 # =============================
 async def analyze_coin_signal_v2(coin: dict) -> dict:
     symbol = coin["symbol"]
@@ -178,15 +189,11 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     volume = coin.get("volume", 0)
 
     if last_price <= 0:
-        return {"symbol": symbol, "direction": "LONG", "orderType": "MARKET",
-                "entry": 0, "tp": 0, "sl": 0, "strength": 0,
-                "reason": "⚠️ Không có dữ liệu giá hợp lệ"}
+        return None
 
     closes = await fetch_klines(symbol, limit=100)
-    if not closes or len(closes) < 20:
-        return {"symbol": symbol, "direction": "LONG", "orderType": "MARKET",
-                "entry": 0, "tp": 0, "sl": 0, "strength": 0,
-                "reason": "⚠️ Không có dữ liệu Kline"}
+    if not closes or len(closes) < 50:  # cần ít nhất 50 nến
+        return None
 
     rsi = calculate_rsi(closes, 14)
     ma5, ma20 = np.mean(closes[-5:]), np.mean(closes[-20:])
