@@ -130,3 +130,45 @@ async def job_trade_signals(_=None):
             return
 
         market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
+        candidates = [c for c in all_coins if (c["change_pct"] >= 0 if market_trend == "LONG" else c["change_pct"] < 0)]
+        if len(candidates) < 5:
+            candidates = all_coins
+
+        if len(candidates) >= 5:
+            selected = random.sample(candidates, 5)
+        else:
+            selected = candidates
+
+        _last_selected = selected
+        messages = []
+        for i, coin in enumerate(selected):
+            mode = "SCALPING" if i < 3 else "SWING"
+            msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
+            if msg:
+                messages.append(msg)
+
+        if messages:
+            for m in messages:
+                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=m)
+        else:
+            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="⚠️ Không có tín hiệu hợp lệ.")
+    except Exception as e:
+        print(f"[ERROR] job_trade_signals: {e}")
+        print(traceback.format_exc())
+
+
+# =============================
+# Setup job vào job_queue
+# =============================
+def setup_jobs(application):
+    tz = pytz.timezone("Asia/Ho_Chi_Minh")
+
+    application.job_queue.run_daily(job_morning_message, time=time(6, 0, 0, tzinfo=tz))
+    application.job_queue.run_daily(job_evening_summary, time=time(22, 0, 0, tzinfo=tz))
+
+    for h in range(6, 22):
+        for m in [15, 45]:
+            application.job_queue.run_daily(job_trade_signals_notice, time=time(h, m - 1, 0, tzinfo=tz))
+            application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
+
+    print("✅ Scheduler đã setup thành công!")
