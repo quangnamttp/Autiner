@@ -105,7 +105,7 @@ async def get_usdt_vnd_rate():
 async def get_market_sentiment():
     """Xu hướng Long/Short toàn thị trường"""
     try:
-        url = f"{MEXC_BASE_URL}/api/v1/contract/future/ticker"
+        url = f"{MEXC_BASE_URL}/api/v1/contract/ticker"
         async with aiohttp.ClientSession() as session:
             data = await safe_get_json(url, session)
             if data and data.get("success") and "data" in data:
@@ -145,48 +145,31 @@ async def get_market_funding_volume():
     return {"funding": "N/A", "volume": "N/A", "trend": "N/A"}
 
 
-# =============================
-# Top Futures
-# =============================
 async def get_top20_futures(limit: int = 20):
-    """Top futures theo volume (lọc coin rác an toàn)"""
+    """Top futures theo volume (không loại coin giá rẻ)"""
     try:
-        url = f"{MEXC_BASE_URL}/api/v1/contract/future/ticker"
+        url = f"{MEXC_BASE_URL}/api/v1/contract/ticker"
         async with aiohttp.ClientSession() as session:
             data = await safe_get_json(url, session)
-            if not data:
-                print("[ERROR] get_top20_futures: Không nhận được dữ liệu từ API")
-                return []
-            if not data.get("success") or "data" not in data:
-                print(f"[ERROR] get_top20_futures: Response lỗi {data}")
-                return []
-
-            filtered = []
-            for c in data["data"]:
-                if not c["symbol"].endswith("_USDT"):
-                    continue
-                last_price = float(c.get("lastPrice", 0))
-                volume = float(c.get("volume", 0))
-
-                # Chỉ lọc coin rác giá cực thấp
-                if last_price < 0.001:
-                    continue
-
-                filtered.append({
-                    "symbol": c["symbol"],
-                    "lastPrice": last_price,
-                    "volume": volume,
-                    "change_pct": float(c.get("riseFallRate", 0))
-                })
-
-            if not filtered:
-                print("[WARNING] get_top20_futures: Không còn coin hợp lệ sau khi lọc")
-                return []
-
-            return sorted(filtered, key=lambda x: x["volume"], reverse=True)[:limit]
-
+            if data and data.get("success") and "data" in data:
+                filtered = []
+                for c in data["data"]:
+                    if not c["symbol"].endswith("_USDT"):
+                        continue
+                    last_price = float(c.get("lastPrice", 0))
+                    volume = float(c.get("volume", 0))
+                    # ⚠️ Chỉ lọc theo volume, bỏ check giá
+                    if volume < 100000:
+                        continue
+                    filtered.append({
+                        "symbol": c["symbol"],
+                        "lastPrice": last_price,
+                        "volume": volume,
+                        "change_pct": float(c.get("riseFallRate", 0))
+                    })
+                return sorted(filtered, key=lambda x: x["volume"], reverse=True)[:limit]
     except Exception as e:
-        print(f"[EXCEPTION] get_top20_futures: {e}")
+        print(f"[ERROR] get_top20_futures: {e}")
     return []
 
 
@@ -234,8 +217,8 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     change_pct = coin["change_pct"]
     volume = coin.get("volume", 0)
 
-    if last_price < 0.001:
-        return {"symbol": symbol, "direction": "N/A", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Coin rác <0.001"}
+    if volume < 100000:  # ⚠️ Bỏ điều kiện giá
+        return {"symbol": symbol, "direction": "N/A", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Volume thấp"}
 
     closes = await fetch_klines(symbol, limit=100)
     if not closes or len(closes) < 20:
@@ -246,7 +229,6 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     trend = "LONG" if change_pct >= 0 and ma5 >= ma20 else "SHORT"
     side = trend
 
-    # Ngược trend phải đủ RSI + MA đảo chiều + volume cực lớn
     if trend == "LONG" and rsi > 75 and ma5 < ma20 and volume >= 30_000_000:
         side = "SHORT"
     elif trend == "SHORT" and rsi < 25 and ma5 > ma20 and volume >= 30_000_000:
@@ -276,11 +258,13 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     if side == "SHORT" and rsi > 70:
         strength += 15
 
+    # giảm nếu sideways
     ma_diff = abs(ma5 - ma20) / ma20 * 100
-    reason_note = ""
     if ma_diff < 0.3:
         strength -= 15
         reason_note = " | ⚠️ Sideways (MA5≈MA20)"
+    else:
+        reason_note = ""
 
     strength = min(100, max(0, strength))
 
