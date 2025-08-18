@@ -4,6 +4,30 @@ from autiner_bot.settings import S
 
 
 # =============================
+# Helper: gọi API an toàn + log
+# =============================
+async def safe_get_json(url: str, session, method="GET", payload=None):
+    try:
+        if method == "POST":
+            async with session.post(url, json=payload, timeout=10) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    print(f"[HTTP ERROR] {url} → {resp.status} | {text[:200]}")
+                    return None
+                return await resp.json()
+        else:
+            async with session.get(url, timeout=10) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    print(f"[HTTP ERROR] {url} → {resp.status} | {text[:200]}")
+                    return None
+                return await resp.json()
+    except Exception as e:
+        print(f"[EXCEPTION] {url} → {e}")
+        return None
+
+
+# =============================
 # Chuẩn hóa symbol cho Futures
 # =============================
 def normalize_symbol(symbol: str) -> str:
@@ -21,10 +45,9 @@ async def get_usdt_vnd_rate():
         payload = {"asset": "USDT", "fiat": "VND", "tradeType": "BUY", "page": 1, "rows": 1, "payTypes": []}
         headers = {"Content-Type": "application/json"}
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
-                data = await resp.json()
-                if "data" in data and len(data["data"]) > 0:
-                    return float(data["data"][0]["adv"]["price"])
+            data = await safe_get_json(url, session, method="POST", payload=payload)
+            if data and "data" in data and len(data["data"]) > 0:
+                return float(data["data"][0]["adv"]["price"])
     except Exception as e:
         print(f"[ERROR] get_usdt_vnd_rate (Binance): {e}")
     return 25000.0
@@ -37,23 +60,22 @@ async def get_market_sentiment():
     try:
         url = S.MEXC_TICKER_URL
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                if data.get("success") and "data" in data:
-                    coins = data["data"]
-                    long_vol, short_vol = 0, 0
-                    for c in coins:
-                        if not c["symbol"].endswith("_USDT"):
-                            continue
-                        vol = float(c.get("volume", 0))
-                        change_pct = float(c.get("riseFallRate", 0))
-                        if change_pct >= 0:
-                            long_vol += vol
-                        else:
-                            short_vol += vol
-                    total = long_vol + short_vol
-                    if total > 0:
-                        return {"long": round(long_vol / total * 100, 2), "short": round(short_vol / total * 100, 2)}
+            data = await safe_get_json(url, session)
+            if data and data.get("success") and "data" in data:
+                coins = data["data"]
+                long_vol, short_vol = 0, 0
+                for c in coins:
+                    if not c["symbol"].endswith("_USDT"):
+                        continue
+                    vol = float(c.get("volume", 0))
+                    change_pct = float(c.get("riseFallRate", 0))
+                    if change_pct >= 0:
+                        long_vol += vol
+                    else:
+                        short_vol += vol
+                total = long_vol + short_vol
+                if total > 0:
+                    return {"long": round(long_vol / total * 100, 2), "short": round(short_vol / total * 100, 2)}
     except Exception as e:
         print(f"[ERROR] get_market_sentiment: {e}")
     return {"long": 50.0, "short": 50.0}
@@ -66,14 +88,13 @@ async def get_market_funding_volume():
     try:
         url = S.MEXC_FUNDING_URL
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                if data.get("success") and "data" in data:
-                    all_data = data["data"]
-                    rates = [float(c.get("fundingRate", 0)) for c in all_data if "fundingRate" in c]
-                    avg_funding = sum(rates) / len(rates) if rates else 0
-                    total_vol = sum(float(c.get("volume", 0)) for c in all_data if "volume" in c)
-                    return {"funding": f"{avg_funding * 100:.4f}%", "volume": f"{total_vol:,.0f}", "trend": "Tăng" if avg_funding > 0 else "Giảm"}
+            data = await safe_get_json(url, session)
+            if data and data.get("success") and "data" in data:
+                all_data = data["data"]
+                rates = [float(c.get("fundingRate", 0)) for c in all_data if "fundingRate" in c]
+                avg_funding = sum(rates) / len(rates) if rates else 0
+                total_vol = sum(float(c.get("volume", 0)) for c in all_data if "volume" in c)
+                return {"funding": f"{avg_funding * 100:.4f}%", "volume": f"{total_vol:,.0f}", "trend": "Tăng" if avg_funding > 0 else "Giảm"}
     except Exception as e:
         print(f"[ERROR] get_market_funding_volume: {e}")
     return {"funding": "N/A", "volume": "N/A", "trend": "N/A"}
@@ -86,22 +107,25 @@ async def get_top20_futures(limit: int = 20):
     try:
         url = S.MEXC_TICKER_URL
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                if data.get("success") and "data" in data:
-                    filtered = []
-                    for c in data["data"]:
-                        if not c["symbol"].endswith("_USDT"):
-                            continue
-                        if not c.get("lastPrice") or float(c.get("lastPrice", 0)) <= 0:
-                            continue
-                        filtered.append({
-                            "symbol": c["symbol"],
-                            "lastPrice": float(c.get("lastPrice", 0)),
-                            "volume": float(c.get("volume", 0)),
-                            "change_pct": float(c.get("riseFallRate", 0))
-                        })
-                    return sorted(filtered, key=lambda x: x["volume"], reverse=True)[:limit]
+            data = await safe_get_json(url, session)
+            if data and data.get("success") and "data" in data:
+                filtered = []
+                for c in data["data"]:
+                    if not c["symbol"].endswith("_USDT"):
+                        continue
+                    if not c.get("lastPrice") or float(c.get("lastPrice", 0)) <= 0:
+                        continue
+                    filtered.append({
+                        "symbol": c["symbol"],
+                        "lastPrice": float(c.get("lastPrice", 0)),
+                        "volume": float(c.get("volume", 0)),
+                        "change_pct": float(c.get("riseFallRate", 0))
+                    })
+                if not filtered:
+                    print(f"[WARNING] get_top20_futures → empty after filtering")
+                return sorted(filtered, key=lambda x: x["volume"], reverse=True)[:limit]
+            else:
+                print(f"[WARNING] get_top20_futures → no data or success=false, raw={data}")
     except Exception as e:
         print(f"[ERROR] get_top20_futures: {e}")
     return []
@@ -134,12 +158,19 @@ async def fetch_klines(symbol: str, limit: int = 100):
     url = S.MEXC_KLINES_URL.format(sym=sym)
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                if data.get("success") and "data" in data and data["data"]:
-                    return [float(c[4]) for c in data["data"]][-limit:]
+            data = await safe_get_json(url, session)
+            if not data:
+                print(f"[ERROR] fetch_klines {symbol} → no response")
+                return []
+            if not data.get("success"):
+                print(f"[ERROR] fetch_klines {symbol} → success=false, raw={data}")
+                return []
+            if not data.get("data"):
+                print(f"[WARNING] fetch_klines {symbol} → empty data list")
+                return []
+            return [float(c[4]) for c in data["data"]][-limit:]
     except Exception as e:
-        print(f"[ERROR] fetch_klines {symbol}: {e}")
+        print(f"[EXCEPTION] fetch_klines {symbol}: {e}")
     return []
 
 
@@ -151,10 +182,11 @@ async def fetch_last_price(symbol: str) -> float:
     url = f"https://contract.mexc.com/api/v1/contract/fair_price/{sym}"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                if data.get("success") and "data" in data:
-                    return float(data["data"].get("fairPrice", 0))
+            data = await safe_get_json(url, session)
+            if data and data.get("success") and "data" in data:
+                return float(data["data"].get("fairPrice", 0))
+            else:
+                print(f"[WARNING] fetch_last_price {symbol} → no valid data, raw={data}")
     except Exception as e:
         print(f"[ERROR] fetch_last_price {symbol}: {e}")
     return 0.0
@@ -184,16 +216,13 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     rsi = calculate_rsi(closes, 14)
     ma5, ma20 = np.mean(closes[-5:]), np.mean(closes[-20:])
 
-    # ============= LOGIC MỚI =============
     # Trend chính
     if change_pct > 0 and ma5 > ma20:
         side = "LONG"
-        # Chỉ SHORT ngược khi RSI cực cao + MA5 cắt xuống
-        if rsi > 75 and ma5 < ma20:
+        if rsi > 75 and ma5 < ma20:  # điều kiện đảo chiều
             side = "SHORT"
     elif change_pct < 0 and ma5 < ma20:
         side = "SHORT"
-        # Chỉ LONG ngược khi RSI cực thấp + MA5 cắt lên
         if rsi < 25 and ma5 > ma20:
             side = "LONG"
     else:
