@@ -1,53 +1,39 @@
 import aiohttp
-import time
-import hmac
-import hashlib
 import numpy as np
 
-# =============================
-# API Key/Secret trực tiếp
-# =============================
-API_KEY = "mx0vgl8vcbqeQC9MYS"
-API_SECRET = "3974e94436b0453da81fdb0289be0b8c"
-BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Helper ký request
+# Helper: gọi API an toàn + log
 # =============================
-def sign_params(params: dict) -> dict:
-    params["api_key"] = API_KEY
-    params["req_time"] = str(int(time.time() * 1000))
-    query = "&".join([f"{k}={params[k]}" for k in sorted(params)])
-    signature = hmac.new(API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
-    params["sign"] = signature
-    return params
-
-async def safe_request(session, method: str, endpoint: str, params=None):
+async def safe_get_json(url: str, session, method="GET", payload=None, headers=None):
     try:
-        url = f"{BASE_URL}{endpoint}"
-        if params is None:
-            params = {}
-        signed = sign_params(params)
-
-        if method == "GET":
-            async with session.get(url, params=signed, timeout=10) as resp:
-                data = await resp.json()
-                return data
+        if method == "POST":
+            async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    print(f"[HTTP ERROR] {url} → {resp.status} | {text[:200]}")
+                    return None
+                return await resp.json()
         else:
-            async with session.post(url, data=signed, timeout=10) as resp:
-                data = await resp.json()
-                return data
+            async with session.get(url, headers=headers, timeout=10) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    print(f"[HTTP ERROR] {url} → {resp.status} | {text[:200]}")
+                    return None
+                return await resp.json()
     except Exception as e:
-        print(f"[EXCEPTION] {endpoint} → {e}")
+        print(f"[EXCEPTION] {url} → {e}")
         return None
 
+
 # =============================
-# Chuẩn hóa symbol
+# Chuẩn hóa symbol cho Futures
 # =============================
 def normalize_symbol(symbol: str) -> str:
     if not symbol.endswith("_UMCBL"):
         return symbol.replace("_USDT", "_USDT_UMCBL")
     return symbol
+
 
 # =============================
 # Lấy tỷ giá USDT/VND từ Binance P2P
@@ -58,72 +44,87 @@ async def get_usdt_vnd_rate():
         payload = {"asset": "USDT", "fiat": "VND", "tradeType": "BUY", "page": 1, "rows": 1, "payTypes": []}
         headers = {"Content-Type": "application/json"}
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
-                data = await resp.json()
-                if data and "data" in data and len(data["data"]) > 0:
-                    return float(data["data"][0]["adv"]["price"])
+            data = await safe_get_json(url, session, method="POST", payload=payload, headers=headers)
+            if data and "data" in data and len(data["data"]) > 0:
+                return float(data["data"][0]["adv"]["price"])
     except Exception as e:
         print(f"[ERROR] get_usdt_vnd_rate (Binance): {e}")
     return 25000.0
 
+
 # =============================
-# Sentiment thị trường
+# Sentiment thị trường (MEXC API)
 # =============================
 async def get_market_sentiment():
-    async with aiohttp.ClientSession() as session:
-        data = await safe_request(session, "GET", "/api/v1/contract/ticker")
-        if data and data.get("success") and "data" in data:
-            coins = data["data"]
-            long_vol, short_vol = 0, 0
-            for c in coins:
-                if not c["symbol"].endswith("_USDT"):
-                    continue
-                vol = float(c.get("volume", 0))
-                change_pct = float(c.get("riseFallRate", 0))
-                if change_pct >= 0:
-                    long_vol += vol
-                else:
-                    short_vol += vol
-            total = long_vol + short_vol
-            if total > 0:
-                return {"long": round(long_vol / total * 100, 2), "short": round(short_vol / total * 100, 2)}
+    try:
+        url = "https://contract.mexc.com/api/v1/contract/ticker"
+        async with aiohttp.ClientSession() as session:
+            data = await safe_get_json(url, session)
+            if data and data.get("success") and "data" in data:
+                coins = data["data"]
+                long_vol, short_vol = 0, 0
+                for c in coins:
+                    if not c["symbol"].endswith("_USDT"):
+                        continue
+                    vol = float(c.get("volume", 0))
+                    change_pct = float(c.get("riseFallRate", 0))
+                    if change_pct >= 0:
+                        long_vol += vol
+                    else:
+                        short_vol += vol
+                total = long_vol + short_vol
+                if total > 0:
+                    return {"long": round(long_vol / total * 100, 2), "short": round(short_vol / total * 100, 2)}
+    except Exception as e:
+        print(f"[ERROR] get_market_sentiment: {e}")
     return {"long": 50.0, "short": 50.0}
+
 
 # =============================
 # Funding + Volume
 # =============================
 async def get_market_funding_volume():
-    async with aiohttp.ClientSession() as session:
-        data = await safe_request(session, "GET", "/api/v1/contract/funding_rate")
-        if data and data.get("success") and "data" in data:
-            all_data = data["data"]
-            rates = [float(c.get("fundingRate", 0)) for c in all_data if "fundingRate" in c]
-            avg_funding = sum(rates) / len(rates) if rates else 0
-            total_vol = sum(float(c.get("volume", 0)) for c in all_data if "volume" in c)
-            return {"funding": f"{avg_funding * 100:.4f}%", "volume": f"{total_vol:,.0f}", "trend": "Tăng" if avg_funding > 0 else "Giảm"}
+    try:
+        url = "https://contract.mexc.com/api/v1/contract/funding_rate"
+        async with aiohttp.ClientSession() as session:
+            data = await safe_get_json(url, session)
+            if data and data.get("success") and "data" in data:
+                all_data = data["data"]
+                rates = [float(c.get("fundingRate", 0)) for c in all_data if "fundingRate" in c]
+                avg_funding = sum(rates) / len(rates) if rates else 0
+                total_vol = sum(float(c.get("volume", 0)) for c in all_data if "volume" in c)
+                return {"funding": f"{avg_funding * 100:.4f}%", "volume": f"{total_vol:,.0f}", "trend": "Tăng" if avg_funding > 0 else "Giảm"}
+    except Exception as e:
+        print(f"[ERROR] get_market_funding_volume: {e}")
     return {"funding": "N/A", "volume": "N/A", "trend": "N/A"}
+
 
 # =============================
 # Top Futures
 # =============================
 async def get_top20_futures(limit: int = 20):
-    async with aiohttp.ClientSession() as session:
-        data = await safe_request(session, "GET", "/api/v1/contract/ticker")
-        if data and data.get("success") and "data" in data:
-            filtered = []
-            for c in data["data"]:
-                if not c["symbol"].endswith("_USDT"):
-                    continue
-                if not c.get("lastPrice") or float(c.get("lastPrice", 0)) <= 0:
-                    continue
-                filtered.append({
-                    "symbol": c["symbol"],
-                    "lastPrice": float(c.get("lastPrice", 0)),
-                    "volume": float(c.get("volume", 0)),
-                    "change_pct": float(c.get("riseFallRate", 0))
-                })
-            return sorted(filtered, key=lambda x: x["volume"], reverse=True)[:limit]
+    try:
+        url = "https://contract.mexc.com/api/v1/contract/ticker"
+        async with aiohttp.ClientSession() as session:
+            data = await safe_get_json(url, session)
+            if data and data.get("success") and "data" in data:
+                filtered = []
+                for c in data["data"]:
+                    if not c["symbol"].endswith("_USDT"):
+                        continue
+                    if not c.get("lastPrice") or float(c.get("lastPrice", 0)) <= 0:
+                        continue
+                    filtered.append({
+                        "symbol": c["symbol"],
+                        "lastPrice": float(c.get("lastPrice", 0)),
+                        "volume": float(c.get("volume", 0)),
+                        "change_pct": float(c.get("riseFallRate", 0))
+                    })
+                return sorted(filtered, key=lambda x: x["volume"], reverse=True)[:limit]
+    except Exception as e:
+        print(f"[ERROR] get_top20_futures: {e}")
     return []
+
 
 # =============================
 # RSI
@@ -143,19 +144,26 @@ def calculate_rsi(prices, period: int = 14) -> float:
     rs = avg_gain / avg_loss
     return float(100 - (100 / (1 + rs)))
 
+
 # =============================
 # Kline
 # =============================
 async def fetch_klines(symbol: str, limit: int = 100):
     sym = normalize_symbol(symbol)
-    async with aiohttp.ClientSession() as session:
-        data = await safe_request(session, "GET", "/api/v1/contract/kline/" + sym, params={"interval": "Min1", "limit": str(limit)})
-        if data and data.get("success") and "data" in data:
+    url = f"https://contract.mexc.com/api/v1/contract/kline/{sym}?interval=Min1&limit={limit}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            data = await safe_get_json(url, session)
+            if not data or not data.get("success") or not data.get("data"):
+                return []
             return [float(c[4]) for c in data["data"]][-limit:]
+    except Exception as e:
+        print(f"[EXCEPTION] fetch_klines {symbol}: {e}")
     return []
 
+
 # =============================
-# Phân tích tín hiệu V2
+# Phân tích tín hiệu V3 (chuẩn RSI + MA + Volume)
 # =============================
 async def analyze_coin_signal_v2(coin: dict) -> dict:
     symbol = coin["symbol"]
@@ -164,11 +172,11 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     volume = coin.get("volume", 0)
 
     if last_price <= 0:
-        return {"symbol": symbol, "direction": "NONE", "strength": 0, "reason": "⚠️ Không có dữ liệu giá hợp lệ"}
+        return {"symbol": symbol, "direction": "LONG", "orderType": "MARKET", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Không có dữ liệu giá hợp lệ"}
 
     closes = await fetch_klines(symbol, limit=100)
     if not closes or len(closes) < 20:
-        return {"symbol": symbol, "direction": "NONE", "strength": 0, "reason": "⚠️ Không có dữ liệu Kline"}
+        return {"symbol": symbol, "direction": "LONG", "orderType": "MARKET", "entry": 0, "tp": 0, "sl": 0, "strength": 0, "reason": "⚠️ Không có dữ liệu Kline"}
 
     rsi = calculate_rsi(closes, 14)
     ma5, ma20 = np.mean(closes[-5:]), np.mean(closes[-20:])
@@ -176,16 +184,20 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     # Trend chính
     if change_pct > 0 and ma5 > ma20:
         side = "LONG"
-        if rsi > 75 and ma5 < ma20:
-            side = "SHORT"
     elif change_pct < 0 and ma5 < ma20:
         side = "SHORT"
-        if rsi < 25 and ma5 > ma20:
-            side = "LONG"
     else:
         side = "LONG" if change_pct >= 0 else "SHORT"
 
-    # ATR tính TP/SL
+    # Đảo chiều khi đủ RSI + MA + Volume
+    if side == "LONG":
+        if rsi > 75 and ma5 < ma20 and volume > 10_000_000:
+            side = "SHORT"
+    elif side == "SHORT":
+        if rsi < 25 and ma5 > ma20 and volume > 10_000_000:
+            side = "LONG"
+
+    # ATR → TP/SL
     highs = np.array(closes[-20:]) * 1.002
     lows = np.array(closes[-20:]) * 0.998
     tr = np.maximum(highs - lows, np.abs(highs - closes[-2]), np.abs(lows - closes[-2]))
@@ -200,13 +212,12 @@ async def analyze_coin_signal_v2(coin: dict) -> dict:
     # Strength
     strength = 60
     if abs(change_pct) > 3:
-        strength += 15
-    if side == "LONG" and rsi < 25 and ma5 > ma20:
-        strength += 15
-    if side == "SHORT" and rsi > 75 and ma5 < ma20:
-        strength += 15
+        strength += 10
     if volume > 10_000_000:
         strength += 10
+    if (side == "LONG" and rsi < 25 and ma5 > ma20 and volume > 10_000_000) or \
+       (side == "SHORT" and rsi > 75 and ma5 < ma20 and volume > 10_000_000):
+        strength += 15
     strength = min(100, strength)
 
     return {
