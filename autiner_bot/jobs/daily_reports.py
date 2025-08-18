@@ -33,7 +33,7 @@ async def get_market_overview():
             return {
                 "long": 50.0,
                 "short": 50.0,
-                "trend": "Không xác định",
+                "trend": "❓ Không xác định",
                 "top5": []
             }
 
@@ -47,9 +47,15 @@ async def get_market_overview():
             long_pct = round(len(ups) / total * 100, 1)
             short_pct = round(len(downs) / total * 100, 1)
 
-        avg_change = sum([c.get("change_pct", 0) for c in coins]) / len(coins)
-        trend = "📈 Tăng" if avg_change > 0 else "📉 Giảm"
+        # Đồng bộ xu hướng theo Long/Short
+        if long_pct > short_pct:
+            trend = "📈 Xu hướng TĂNG (phe LONG chiếm ưu thế)"
+        elif short_pct > long_pct:
+            trend = "📉 Xu hướng GIẢM (phe SHORT chiếm ưu thế)"
+        else:
+            trend = "⚖️ Thị trường cân bằng"
 
+        # Top 5 coin biến động mạnh nhất
         top5 = sorted(coins, key=lambda x: abs(x.get("change_pct", 0)), reverse=True)[:5]
 
         return {
@@ -86,12 +92,12 @@ async def job_morning_message(_=None):
             f"🌞 06:00 — Chào buổi sáng anh Trương ☀️\n\n"
             f"💵 1 USD = {vnd_rate:,.0f} VND\n"
             f"📊 Thị trường: 🟢 LONG {market['long']}% | 🔴 SHORT {market['short']}%\n"
-            f"📌 Xu hướng chung: {market['trend']}\n\n"
+            f"{market['trend']}\n\n"
             f"🔥 Top 5 đồng coin nổi bật:\n"
         )
 
         for c in market["top5"]:
-            msg += f" • {c['symbol'].replace('_USDT','/USDT')} |  {c['change_pct']:+.2f}%\n"
+            msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
 
         msg += "\n⏳ Trong 15 phút nữa sẽ có tín hiệu. Chuẩn bị sẵn sàng để vào lệnh nhé! 🚀"
 
@@ -123,12 +129,12 @@ async def job_evening_summary(_=None):
             f"🌙 22:00 — Tổng kết phiên giao dịch 🌙\n\n"
             f"💵 1 USD = {vnd_rate:,.0f} VND\n"
             f"📊 Thị trường: 🟢 LONG {market['long']}% | 🔴 SHORT {market['short']}%\n"
-            f"📌 Xu hướng chung: {market['trend']}\n\n"
+            f"{market['trend']}\n\n"
             f"🔥 Top 5 đồng coin nổi bật:\n"
         )
 
         for c in market["top5"]:
-            msg += f" • {c['symbol'].replace('_USDT','/USDT')} |  {c['change_pct']:+.2f}%\n"
+            msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
 
         msg += "\n📊 Hiệu suất lệnh sẽ được tổng hợp trong bản nâng cấp sau. 🚀"
 
