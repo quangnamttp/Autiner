@@ -5,7 +5,7 @@ import traceback
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy dữ liệu ticker Futures
+# Lấy dữ liệu ticker Futures (top 30)
 # =============================
 async def get_top30_futures(limit: int = 30):
     try:
@@ -22,7 +22,7 @@ async def get_top30_futures(limit: int = 30):
                     if not t.get("symbol", "").endswith("_USDT"):
                         continue
                     last_price = float(t["lastPrice"])
-                    if last_price < 0.01:
+                    if last_price < 0.01:  # bỏ coin rác
                         continue
                     coins.append({
                         "symbol": t["symbol"],
@@ -89,7 +89,7 @@ async def get_market_sentiment():
 
 
 # =============================
-# Signal Generator V2 (thoáng)
+# Signal Generator V2 (theo trend, thoáng)
 # =============================
 async def analyze_coin_signal_v2(coin: dict, market_trend: str = "LONG") -> dict | None:
     symbol = coin["symbol"]
@@ -125,14 +125,14 @@ async def analyze_coin_signal_v2(coin: dict, market_trend: str = "LONG") -> dict
     else:
         tp_price, sl_price = entry_price - 2 * atr, entry_price + 1.5 * atr
 
-    # Strength chỉ mang tính tham khảo, không quá gắt
+    # Strength thoáng (40–100)
     strength = 50
     if (side == "LONG" and rsi < 40) or (side == "SHORT" and rsi > 60):
         strength += 20
     if abs(change_pct) > 1:
         strength += 10
 
-    strength = min(100, max(40, strength))  # không thấp hơn 40
+    strength = min(100, max(40, strength))  
 
     label = "⭐ Tín hiệu theo trend ⭐" if strength >= 60 else "Tín hiệu"
 
@@ -147,3 +147,20 @@ async def analyze_coin_signal_v2(coin: dict, market_trend: str = "LONG") -> dict
         "reason": f"{label} | RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f} "
                   f"| Δ {change_pct:.2f}% | Trend={market_trend}"
     }
+
+
+# =============================
+# Lấy tỷ giá USDT/VND từ Binance
+# =============================
+async def get_usdt_vnd_rate() -> float:
+    try:
+        url = "https://api.binance.com/api/v3/ticker/price?symbol=USDTBUSD"
+        url_vnd = "https://api.binance.com/api/v3/ticker/price?symbol=BUSDVND"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as r1, session.get(url_vnd, timeout=10) as r2:
+                usdt_busd = float((await r1.json())["price"])
+                busd_vnd = float((await r2.json())["price"])
+                return usdt_busd * busd_vnd
+    except Exception as e:
+        print(f"[ERROR] get_usdt_vnd_rate: {e}")
+        return 0.0
