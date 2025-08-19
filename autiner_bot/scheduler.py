@@ -78,6 +78,7 @@ async def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPI
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
 
+        # Gắn nhãn
         if sideway:
             label = "⚠️ THAM KHẢO (SIDEWAY) ⚠️"
         elif signal["strength"] >= 70:
@@ -87,12 +88,27 @@ async def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPI
         else:
             label = ""
 
+        # Xu hướng coin riêng
+        change_pct = coin.get("change_pct", 0)
+        if change_pct > 0:
+            coin_trend = f"📊 Xu hướng coin: TĂNG +{change_pct:.2f}%"
+        elif change_pct < 0:
+            coin_trend = f"📊 Xu hướng coin: GIẢM {change_pct:.2f}%"
+        else:
+            coin_trend = f"📊 Xu hướng coin: SIDEWAY {change_pct:.2f}%"
+
+        # Xu hướng thị trường
+        market_text = f"📊 Xu hướng thị trường: {market_trend}"
+        if sideway:
+            market_text += " (Sideway)"
+
         msg = (
             f"{label}\n"
             f"📈 {symbol_display}\n"
             f"{side_icon}\n"
+            f"{market_text}\n"
+            f"{coin_trend}\n"
             f"📌 Chế độ: {mode.upper()}\n"
-            f"📑 Loại lệnh: {signal['orderType']}\n"
             f"💰 Entry: {entry_price} {currency_mode}\n"
             f"🎯 TP: {tp_price} {currency_mode}\n"
             f"🛡️ SL: {sl_price} {currency_mode}\n"
@@ -132,7 +148,7 @@ async def job_trade_signals(_=None):
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
-        # Xác định xu hướng thị trường
+        # Xu hướng thị trường
         if abs(sentiment["long"] - sentiment["short"]) <= 10:  # ≤10% coi là sideway
             market_trend = "LONG"
             sideway = True
@@ -140,7 +156,7 @@ async def job_trade_signals(_=None):
             market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
             sideway = False
 
-        # Không cần lọc gắt, chọn top 5 volume cao nhất
+        # Chọn 5 coin volume cao nhất
         selected = sorted(all_coins, key=lambda x: x["volume"], reverse=True)[:5]
 
         if not selected:
