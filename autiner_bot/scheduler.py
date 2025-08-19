@@ -12,7 +12,6 @@ from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summ
 
 import traceback
 import pytz
-import random
 from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
@@ -120,25 +119,27 @@ async def job_trade_signals(_=None):
         if currency_mode == "VND":
             vnd_rate = await get_usdt_vnd_rate()
             if not vnd_rate or vnd_rate <= 0:
-                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy.")
+                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+                                       text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy.")
                 return
 
         all_coins = await get_top20_futures(limit=20)
         sentiment = await get_market_sentiment()
         if not all_coins:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="⚠️ Không lấy được dữ liệu coin từ sàn.")
+            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+                                   text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
         market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
         candidates = [c for c in all_coins if (c["change_pct"] >= 0 if market_trend == "LONG" else c["change_pct"] < 0)]
-        if len(candidates) < 5:
-            candidates = all_coins
 
-        # Lấy ngẫu nhiên 5 coin, KHÔNG còn ép BTC/ETH mặc định
-        if len(candidates) >= 5:
-            selected = random.sample(candidates, 5)
-        else:
-            selected = candidates
+        # Ưu tiên volume cao nhất → chọn 5 coin đầu
+        selected = sorted(candidates, key=lambda x: x["volume"], reverse=True)[:5]
+
+        if not selected:
+            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+                                   text="⚠️ Không có tín hiệu hợp lệ trong phiên này.")
+            return
 
         _last_selected = selected
         messages = []
@@ -152,7 +153,8 @@ async def job_trade_signals(_=None):
             for m in messages:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=m)
         else:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text="⚠️ Không có tín hiệu hợp lệ.")
+            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+                                   text="⚠️ Không có tín hiệu hợp lệ trong phiên này.")
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
