@@ -148,15 +148,12 @@ async def analyze_market_trend(limit: int = 20):
 
 
 # =============================
-# Lấy dữ liệu nến (Kline) cho 1 coin
+# Lấy dữ liệu nến (kline)
 # =============================
 async def get_kline(symbol: str, interval: str = "Min1", limit: int = 100):
     """
-    Lấy dữ liệu nến cho coin.
-    :param symbol: Ví dụ "BTC_USDT"
-    :param interval: Min1, Min5, Min15, Min30, Hour1, Day1
-    :param limit: số lượng nến (tối đa 1000)
-    :return: list OHLCV [timestamp, open, high, low, close, volume]
+    Lấy dữ liệu nến (OHLCV) cho 1 coin từ MEXC
+    interval: Min1, Min5, Min15, Min30, Hour1, Hour4, Day1 ...
     """
     try:
         url = f"{MEXC_BASE_URL}/api/v1/contract/kline/{symbol}?interval={interval}&limit={limit}"
@@ -165,8 +162,40 @@ async def get_kline(symbol: str, interval: str = "Min1", limit: int = 100):
                 data = await resp.json()
                 if not data or "data" not in data:
                     return []
-                return data["data"]  # mỗi item: [timestamp, open, high, low, close, volume]
+                # Trả về dạng list [{time, open, high, low, close, volume}]
+                klines = []
+                for k in data["data"]:
+                    klines.append({
+                        "time": k[0],
+                        "open": float(k[1]),
+                        "high": float(k[2]),
+                        "low": float(k[3]),
+                        "close": float(k[4]),
+                        "volume": float(k[5]),
+                    })
+                return klines
     except Exception as e:
         print(f"[ERROR] get_kline({symbol}): {e}")
         print(traceback.format_exc())
         return []
+
+
+# =============================
+# Lấy dữ liệu coin cụ thể (kết hợp ticker + nến)
+# =============================
+async def get_coin_data(symbol: str, interval: str = "Min1", limit: int = 100):
+    """
+    Lấy dữ liệu chi tiết 1 coin:
+    - Ticker (last price, change_pct, volume)
+    - Nến (OHLCV)
+    """
+    try:
+        coins = await get_top_futures(limit=200)
+        ticker = next((c for c in coins if c["symbol"] == symbol), None)
+        if not ticker:
+            return None
+        klines = await get_kline(symbol, interval, limit)
+        return {"ticker": ticker, "klines": klines}
+    except Exception as e:
+        print(f"[ERROR] get_coin_data({symbol}): {e}")
+        return None
