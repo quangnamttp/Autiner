@@ -145,3 +145,28 @@ async def analyze_market_trend(limit: int = 20):
             "trend": "❓ Không xác định",
             "top": []
         }
+
+
+# =============================
+# Lấy dữ liệu nến (Kline) cho 1 coin
+# =============================
+async def get_kline(symbol: str, interval: str = "Min1", limit: int = 100):
+    """
+    Lấy dữ liệu nến cho coin.
+    :param symbol: Ví dụ "BTC_USDT"
+    :param interval: Min1, Min5, Min15, Min30, Hour1, Day1
+    :param limit: số lượng nến (tối đa 1000)
+    :return: list OHLCV [timestamp, open, high, low, close, volume]
+    """
+    try:
+        url = f"{MEXC_BASE_URL}/api/v1/contract/kline/{symbol}?interval={interval}&limit={limit}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                if not data or "data" not in data:
+                    return []
+                return data["data"]  # mỗi item: [timestamp, open, high, low, close, volume]
+    except Exception as e:
+        print(f"[ERROR] get_kline({symbol}): {e}")
+        print(traceback.format_exc())
+        return []
