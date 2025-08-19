@@ -4,7 +4,7 @@ from autiner_bot.utils.state import get_state
 from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
-    get_top20_futures,
+    get_top30_futures,   # ✅ đổi từ get_top20_futures
 )
 
 import traceback
@@ -28,7 +28,7 @@ VIETNAMESE_DAYS = {
 # =============================
 async def get_market_overview():
     try:
-        coins = await get_top20_futures(limit=20)
+        coins = await get_top30_futures(limit=20)   # ✅ vẫn giữ limit=20 cho bản tin
         if not coins:
             return {
                 "long": 50.0,
