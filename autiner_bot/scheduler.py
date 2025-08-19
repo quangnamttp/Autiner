@@ -6,6 +6,7 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
     get_market_sentiment,
+    fetch_klines,   # 🔥 thêm để lấy dữ liệu nến từng coin
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -64,7 +65,7 @@ async def job_trade_signals_notice(_=None):
 # =============================
 # Tạo tín hiệu giao dịch (có TP/SL)
 # =============================
-def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPING",
+def create_trade_signal(coin: dict, coin_trend: str, mode: str = "SCALPING",
                         currency_mode="USD", vnd_rate=None, sideway=False):
     try:
         entry_raw = coin["lastPrice"]
@@ -72,22 +73,22 @@ def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPING",
 
         # Tính TP/SL: Scalping ±1%, Swing ±2%
         if mode.upper() == "SCALPING":
-            tp_val = entry_raw * (1.01 if market_trend == "LONG" else 0.99)
-            sl_val = entry_raw * (0.99 if market_trend == "LONG" else 1.01)
+            tp_val = entry_raw * (1.01 if coin_trend == "LONG" else 0.99)
+            sl_val = entry_raw * (0.99 if coin_trend == "LONG" else 1.01)
         else:  # SWING
-            tp_val = entry_raw * (1.02 if market_trend == "LONG" else 0.98)
-            sl_val = entry_raw * (0.98 if market_trend == "LONG" else 1.02)
+            tp_val = entry_raw * (1.02 if coin_trend == "LONG" else 0.98)
+            sl_val = entry_raw * (0.98 if coin_trend == "LONG" else 1.02)
 
         tp = format_price(tp_val, currency_mode, vnd_rate)
         sl = format_price(sl_val, currency_mode, vnd_rate)
 
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
-        side_icon = "🟩 LONG" if market_trend == "LONG" else "🟥 SHORT"
+        side_icon = "🟩 LONG" if coin_trend == "LONG" else "🟥 SHORT"
 
         if sideway:
             label = "⚠️ THAM KHẢO (SIDEWAY) ⚠️"
         else:
-            label = "⭐ TÍN HIỆU THEO TREND ⭐"
+            label = "⭐ TÍN HIỆU ⭐"
 
         msg = (
             f"{label}\n"
@@ -126,23 +127,13 @@ async def job_trade_signals(_=None):
                 return
 
         all_coins = await get_top_futures(limit=15)   # 🔥 chỉ lấy top 15 realtime
-        sentiment = await get_market_sentiment()
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
-        # Xác định xu hướng thị trường
-        if abs(sentiment["long"] - sentiment["short"]) <= 10:  # ≤10% coi là sideway
-            market_trend = "LONG"
-            sideway = True
-        else:
-            market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
-            sideway = False
-
         # Chọn ngẫu nhiên 5 coin trong top 15
         selected = random.sample(all_coins, min(5, len(all_coins)))
-
         if not selected:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không có tín hiệu hợp lệ trong phiên này.")
@@ -150,12 +141,32 @@ async def job_trade_signals(_=None):
 
         _last_selected = selected
         messages = []
+
         for i, coin in enumerate(selected):
+            # 📊 Xác định xu hướng coin dựa trên nến 1 phút
+            closes = await fetch_klines(coin["symbol"], interval="Min1", limit=10)
+            if not closes or len(closes) < 5:
+                continue
+
+            avg5 = sum(closes[-5:]) / 5
+            last = closes[-1]
+
+            if last > avg5 * 1.002:
+                coin_trend = "LONG"
+                sideway = False
+            elif last < avg5 * 0.998:
+                coin_trend = "SHORT"
+                sideway = False
+            else:
+                coin_trend = "LONG"
+                sideway = True  # coi như sideway
+
             mode = "SCALPING" if i < 3 else "SWING"
-            msg = create_trade_signal(coin, market_trend, mode, currency_mode, vnd_rate, sideway)
+            msg = create_trade_signal(coin, coin_trend, mode, currency_mode, vnd_rate, sideway)
             if msg:
                 messages.append(msg)
 
+        # Gửi tin nhắn
         if messages:
             for m in messages:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=m)
