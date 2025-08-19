@@ -145,3 +145,30 @@ async def analyze_market_trend(limit: int = 20):
             "trend": "❓ Không xác định",
             "top": []
         }
+
+
+# =============================
+# Lấy dữ liệu nến (klines)
+# =============================
+async def fetch_klines(symbol: str, interval: str = "Min1", limit: int = 20):
+    """
+    Lấy dữ liệu nến của 1 coin trên MEXC Futures.
+    Trả về danh sách giá đóng cửa (close).
+    """
+    try:
+        url = f"{MEXC_BASE_URL}/api/v1/contract/kline/{symbol}?interval={interval}&limit={limit}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status != 200:
+                    print(f"[ERROR] fetch_klines: HTTP {resp.status}")
+                    return []
+                data = await resp.json()
+                if not data or "data" not in data:
+                    return []
+                # Mỗi item = [timestamp, open, high, low, close, volume]
+                closes = [float(k[4]) for k in data["data"]]
+                return closes
+    except Exception as e:
+        print(f"[ERROR] fetch_klines: {e}")
+        print(traceback.format_exc())
+        return []
