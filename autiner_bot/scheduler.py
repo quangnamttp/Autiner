@@ -5,7 +5,7 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     analyze_coin_signal_v2,
-    get_top30_futures,     # lấy coin từ API, limit=15 ở dưới
+    get_top_futures,
     get_market_sentiment,
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
@@ -55,7 +55,7 @@ async def job_trade_signals_notice(_=None):
             return
         await bot.send_message(
             chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch, chuẩn bị sẵn sàng nhé!"
+            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch theo xu hướng thị trường!"
         )
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
@@ -64,7 +64,7 @@ async def job_trade_signals_notice(_=None):
 # =============================
 # Tạo tín hiệu giao dịch
 # =============================
-async def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPING",
+async def create_trade_signal(coin: dict, market_trend: str, mode: str,
                               currency_mode="USD", vnd_rate=None, sideway=False):
     try:
         signal = await analyze_coin_signal_v2(coin, market_trend)
@@ -78,37 +78,14 @@ async def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPI
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
 
-        # Gắn nhãn
-        if sideway:
-            label = "⚠️ THAM KHẢO (SIDEWAY) ⚠️"
-        elif signal["strength"] >= 70:
-            label = "⭐ TÍN HIỆU MẠNH ⭐"
-        elif signal["strength"] <= 60:
-            label = "⚠️ THAM KHẢO ⚠️"
-        else:
-            label = ""
-
-        # Xu hướng coin riêng
-        change_pct = coin.get("change_pct", 0)
-        if change_pct > 0:
-            coin_trend = f"📊 Xu hướng coin: TĂNG +{change_pct:.2f}%"
-        elif change_pct < 0:
-            coin_trend = f"📊 Xu hướng coin: GIẢM {change_pct:.2f}%"
-        else:
-            coin_trend = f"📊 Xu hướng coin: SIDEWAY {change_pct:.2f}%"
-
-        # Xu hướng thị trường
-        market_text = f"📊 Xu hướng thị trường: {market_trend}"
-        if sideway:
-            market_text += " (Sideway)"
+        label = "⚠️ SIDEWAY, chỉ tham khảo ⚠️" if sideway else "⭐ TÍN HIỆU THEO XU HƯỚNG ⭐"
 
         msg = (
             f"{label}\n"
             f"📈 {symbol_display}\n"
-            f"{side_icon}\n"
-            f"{market_text}\n"
-            f"{coin_trend}\n"
+            f"{side_icon} (Theo thị trường)\n"
             f"📌 Chế độ: {mode.upper()}\n"
+            f"📑 Lệnh: {signal['orderType']}\n"
             f"💰 Entry: {entry_price} {currency_mode}\n"
             f"🎯 TP: {tp_price} {currency_mode}\n"
             f"🛡️ SL: {sl_price} {currency_mode}\n"
@@ -136,12 +113,12 @@ async def job_trade_signals(_=None):
         vnd_rate = None
         if currency_mode == "VND":
             vnd_rate = await get_usdt_vnd_rate()
-            if not vnd_rate or vnd_rate <= 0:
+            if not vnd_rate:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                        text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy.")
                 return
 
-        all_coins = await get_top30_futures(limit=15)   # 🔥 chỉ lấy top 15
+        all_coins = await get_top_futures(limit=15)
         sentiment = await get_market_sentiment()
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
@@ -149,20 +126,14 @@ async def job_trade_signals(_=None):
             return
 
         # Xu hướng thị trường
-        if abs(sentiment["long"] - sentiment["short"]) <= 10:  # ≤10% coi là sideway
-            market_trend = "LONG"
-            sideway = True
+        if abs(sentiment["long"] - sentiment["short"]) <= 10:
+            market_trend, sideway = "SIDEWAY", True
         else:
             market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
             sideway = False
 
-        # Chọn 5 coin volume cao nhất
+        # chọn top 5 volume cao nhất
         selected = sorted(all_coins, key=lambda x: x["volume"], reverse=True)[:5]
-
-        if not selected:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có tín hiệu hợp lệ trong phiên này.")
-            return
 
         _last_selected = selected
         messages = []
