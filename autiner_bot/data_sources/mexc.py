@@ -37,6 +37,34 @@ async def get_top30_futures(limit: int = 30):
         print(f"[ERROR] get_top30_futures: {e}")
         print(traceback.format_exc())
         return []
+# =============================
+# Lấy tỷ giá USDT/VND từ Binance P2P
+# =============================
+async def get_usdt_vnd_rate() -> float:
+    url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
+    payload = {
+        "asset": "USDT",
+        "fiat": "VND",
+        "merchantCheck": False,
+        "page": 1,
+        "rows": 10,
+        "tradeType": "SELL"
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=10) as resp:
+                if resp.status != 200:
+                    print(f"[ERROR] get_usdt_vnd_rate: HTTP {resp.status}")
+                    return 0
+                data = await resp.json()
+                advs = data.get("data", [])
+                if not advs:
+                    return 0
+                prices = [float(ad["adv"]["price"]) for ad in advs[:5] if "adv" in ad]
+                return sum(prices) / len(prices) if prices else 0
+    except Exception as e:
+        print(f"[ERROR] get_usdt_vnd_rate: {e}")
+        return 0
 
 
 # =============================
@@ -148,19 +176,3 @@ async def analyze_coin_signal_v2(coin: dict, market_trend: str = "LONG") -> dict
                   f"| Δ {change_pct:.2f}% | Trend={market_trend}"
     }
 
-
-# =============================
-# Lấy tỷ giá USDT/VND từ Binance
-# =============================
-async def get_usdt_vnd_rate() -> float:
-    try:
-        url = "https://api.binance.com/api/v3/ticker/price?symbol=USDTBUSD"
-        url_vnd = "https://api.binance.com/api/v3/ticker/price?symbol=BUSDVND"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as r1, session.get(url_vnd, timeout=10) as r2:
-                usdt_busd = float((await r1.json())["price"])
-                busd_vnd = float((await r2.json())["price"])
-                return usdt_busd * busd_vnd
-    except Exception as e:
-        print(f"[ERROR] get_usdt_vnd_rate: {e}")
-        return 0.0
