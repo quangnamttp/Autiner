@@ -62,32 +62,44 @@ async def job_trade_signals_notice(_=None):
 
 
 # =============================
-# Tạo tín hiệu giao dịch (có TP/SL)
+# Tạo tín hiệu giao dịch (TP/SL + hướng coin riêng lẻ)
 # =============================
-def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPING",
+def create_trade_signal(coin: dict, mode: str = "SCALPING",
                         currency_mode="USD", vnd_rate=None, sideway=False):
     try:
         entry_raw = coin["lastPrice"]
         entry_price = format_price(entry_raw, currency_mode, vnd_rate)
 
-        # Tính TP/SL: Scalping ±1%, Swing ±2%
-        if mode.upper() == "SCALPING":
-            tp_val = entry_raw * (1.01 if market_trend == "LONG" else 0.99)
-            sl_val = entry_raw * (0.99 if market_trend == "LONG" else 1.01)
-        else:  # SWING
-            tp_val = entry_raw * (1.02 if market_trend == "LONG" else 0.98)
-            sl_val = entry_raw * (0.98 if market_trend == "LONG" else 1.02)
+        # 👉 Xác định hướng từ coin (riêng lẻ)
+        change = coin.get("change_pct", 0)
+        if change > 0:
+            market_trend = "LONG"
+            side_icon = "🟩 LONG"
+        elif change < 0:
+            market_trend = "SHORT"
+            side_icon = "🟥 SHORT"
+        else:
+            market_trend = "⚠️ SIDEWAY"
+            side_icon = "⚠️ SIDEWAY"
+
+        # 👉 Tính TP/SL dựa trên hướng coin
+        if market_trend == "LONG":
+            tp_val = entry_raw * (1.01 if mode.upper() == "SCALPING" else 1.02)
+            sl_val = entry_raw * (0.99 if mode.upper() == "SCALPING" else 0.98)
+        elif market_trend == "SHORT":
+            tp_val = entry_raw * (0.99 if mode.upper() == "SCALPING" else 0.98)
+            sl_val = entry_raw * (1.01 if mode.upper() == "SCALPING" else 1.02)
+        else:  # SIDEWAY
+            tp_val = entry_raw
+            sl_val = entry_raw
 
         tp = format_price(tp_val, currency_mode, vnd_rate)
         sl = format_price(sl_val, currency_mode, vnd_rate)
 
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
-        side_icon = "🟩 LONG" if market_trend == "LONG" else "🟥 SHORT"
 
-        if sideway:
-            label = "⚠️ THAM KHẢO (SIDEWAY) ⚠️"
-        else:
-            label = "⭐ TÍN HIỆU THEO TREND ⭐"
+        # 👉 Nếu thị trường chung sideway thì thêm nhãn cảnh báo
+        label = "⚠️ THAM KHẢO (SIDEWAY THỊ TRƯỜNG) ⚠️" if sideway else "⭐ TÍN HIỆU ⭐"
 
         msg = (
             f"{label}\n"
@@ -125,20 +137,15 @@ async def job_trade_signals(_=None):
                                        text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy.")
                 return
 
-        all_coins = await get_top_futures(limit=15)   # 🔥 chỉ lấy top 15 realtime
+        all_coins = await get_top_futures(limit=15)   # 🔥 lấy top 15 realtime
         sentiment = await get_market_sentiment()
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
-        # Xác định xu hướng thị trường
-        if abs(sentiment["long"] - sentiment["short"]) <= 10:  # ≤10% coi là sideway
-            market_trend = "LONG"
-            sideway = True
-        else:
-            market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
-            sideway = False
+        # Xác định xu hướng thị trường chung (dùng để gắn nhãn sideway thôi)
+        sideway = abs(sentiment["long"] - sentiment["short"]) <= 10
 
         # Chọn ngẫu nhiên 5 coin trong top 15
         selected = random.sample(all_coins, min(5, len(all_coins)))
@@ -152,7 +159,7 @@ async def job_trade_signals(_=None):
         messages = []
         for i, coin in enumerate(selected):
             mode = "SCALPING" if i < 3 else "SWING"
-            msg = create_trade_signal(coin, market_trend, mode, currency_mode, vnd_rate, sideway)
+            msg = create_trade_signal(coin, mode, currency_mode, vnd_rate, sideway)
             if msg:
                 messages.append(msg)
 
