@@ -5,7 +5,7 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     analyze_coin_signal_v2,
-    get_top30_futures,     # 🔥 đổi sang top30
+    get_top30_futures,     # lấy coin từ API, limit=15 ở dưới
     get_market_sentiment,
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
@@ -65,7 +65,7 @@ async def job_trade_signals_notice(_=None):
 # Tạo tín hiệu giao dịch
 # =============================
 async def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPING",
-                              currency_mode="USD", vnd_rate=None):
+                              currency_mode="USD", vnd_rate=None, sideway=False):
     try:
         signal = await analyze_coin_signal_v2(coin, market_trend)
         if not signal or signal["entry"] <= 0:
@@ -78,7 +78,9 @@ async def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPI
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
         side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
 
-        if signal["strength"] >= 70:
+        if sideway:
+            label = "⚠️ THAM KHẢO (SIDEWAY) ⚠️"
+        elif signal["strength"] >= 70:
             label = "⭐ TÍN HIỆU MẠNH ⭐"
         elif signal["strength"] <= 60:
             label = "⚠️ THAM KHẢO ⚠️"
@@ -95,7 +97,6 @@ async def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPI
             f"🎯 TP: {tp_price} {currency_mode}\n"
             f"🛡️ SL: {sl_price} {currency_mode}\n"
             f"📊 Độ mạnh: {signal['strength']}%\n"
-            f"📌 Lý do:\n{signal['reason']}\n"
             f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
         )
         return msg
@@ -124,7 +125,7 @@ async def job_trade_signals(_=None):
                                        text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy.")
                 return
 
-        all_coins = await get_top30_futures(limit=30)   # 🔥 đổi sang top30
+        all_coins = await get_top30_futures(limit=15)   # 🔥 chỉ lấy top 15
         sentiment = await get_market_sentiment()
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
@@ -132,16 +133,15 @@ async def job_trade_signals(_=None):
             return
 
         # Xác định xu hướng thị trường
-        market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
+        if abs(sentiment["long"] - sentiment["short"]) <= 10:  # ≤10% coi là sideway
+            market_trend = "LONG"
+            sideway = True
+        else:
+            market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
+            sideway = False
 
-        # Chọn coin cùng chiều trend
-        candidates = [
-            c for c in all_coins
-            if (c["change_pct"] >= 0 if market_trend == "LONG" else c["change_pct"] < 0)
-        ]
-
-        # Ưu tiên volume cao → chọn 5 coin đầu tiên
-        selected = sorted(candidates, key=lambda x: x["volume"], reverse=True)[:5]
+        # Không cần lọc gắt, chọn top 5 volume cao nhất
+        selected = sorted(all_coins, key=lambda x: x["volume"], reverse=True)[:5]
 
         if not selected:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
@@ -152,7 +152,7 @@ async def job_trade_signals(_=None):
         messages = []
         for i, coin in enumerate(selected):
             mode = "SCALPING" if i < 3 else "SWING"
-            msg = await create_trade_signal(coin, market_trend, mode, currency_mode, vnd_rate)
+            msg = await create_trade_signal(coin, market_trend, mode, currency_mode, vnd_rate, sideway)
             if msg:
                 messages.append(msg)
 
