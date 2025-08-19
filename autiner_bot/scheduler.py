@@ -134,6 +134,7 @@ async def job_trade_signals(_=None):
         if len(candidates) < 5:
             candidates = all_coins
 
+        # Lấy ngẫu nhiên 5 coin, KHÔNG còn ép BTC/ETH mặc định
         if len(candidates) >= 5:
             selected = random.sample(candidates, 5)
         else:
