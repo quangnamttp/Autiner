@@ -117,27 +117,19 @@ async def get_market_sentiment():
 
 
 # =============================
-# Signal Generator V2 (theo trend, thoáng)
+# Signal Generator: theo trend thị trường
 # =============================
 async def analyze_coin_signal_v2(coin: dict, market_trend: str = "LONG") -> dict | None:
     symbol = coin["symbol"]
     last_price = coin["lastPrice"]
-    change_pct = coin["change_pct"]
 
     closes = await fetch_klines(symbol, limit=100)
     if not closes or len(closes) < 30:
         return None
 
-    # Indicators
+    # RSI + MA
     rsi = calculate_rsi(closes, 14)
     ma5, ma20 = np.mean(closes[-5:]), np.mean(closes[-20:])
-
-    # Xác định hướng vào lệnh theo xu hướng thị trường
-    side = market_trend
-    if market_trend == "LONG" and change_pct < 0:
-        return None
-    if market_trend == "SHORT" and change_pct > 0:
-        return None
 
     # ATR tính biên độ dao động
     highs = np.array(closes[-20:]) * 1.002
@@ -148,31 +140,20 @@ async def analyze_coin_signal_v2(coin: dict, market_trend: str = "LONG") -> dict
     atr = np.mean(tr) if len(tr) > 0 else last_price * 0.005
 
     entry_price = last_price
-    if side == "LONG":
+    if market_trend == "LONG":
         tp_price, sl_price = entry_price + 2 * atr, entry_price - 1.5 * atr
     else:
         tp_price, sl_price = entry_price - 2 * atr, entry_price + 1.5 * atr
 
-    # Strength thoáng (40–100)
-    strength = 50
-    if (side == "LONG" and rsi < 40) or (side == "SHORT" and rsi > 60):
-        strength += 20
-    if abs(change_pct) > 1:
-        strength += 10
-
-    strength = min(100, max(40, strength))  
-
-    label = "⭐ Tín hiệu theo trend ⭐" if strength >= 60 else "Tín hiệu"
+    strength = 70 if market_trend != "SIDEWAY" else 50
 
     return {
         "symbol": symbol,
-        "direction": side,
+        "direction": market_trend,
         "orderType": "MARKET",
         "entry": round(entry_price, 4),
         "tp": round(tp_price, 4),
         "sl": round(sl_price, 4),
         "strength": strength,
-        "reason": f"{label} | RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f} "
-                  f"| Δ {change_pct:.2f}% | Trend={market_trend}"
+        "reason": f"Theo xu hướng {market_trend} | RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f}"
     }
-
