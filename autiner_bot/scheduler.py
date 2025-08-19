@@ -1,177 +1,149 @@
-from telegram import Bot
-from autiner_bot.settings import S
-from autiner_bot.utils.state import get_state
-from autiner_bot.utils.time_utils import get_vietnam_time
-from autiner_bot.data_sources.mexc import (
-    get_usdt_vnd_rate,
-    analyze_coin_signal_v2,
-    get_top20_futures,
-    get_market_sentiment,
-)
-from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
-
+import aiohttp
+import numpy as np
 import traceback
-import pytz
-from datetime import time
 
-bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
-_last_selected = []
-
+MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Format giá
+# Lấy dữ liệu ticker Futures
 # =============================
-def format_price(value: float, currency: str = "USD", vnd_rate: float | None = None) -> str:
+async def get_top30_futures(limit: int = 30):
     try:
-        if currency == "VND":
-            if not vnd_rate or vnd_rate <= 0:
-                return "N/A VND"
-            value = value * vnd_rate
-            if value >= 1_000_000:
-                return f"{round(value):,}".replace(",", ".")
-            else:
-                return f"{value:,.2f}".replace(",", ".")
-        else:
-            s = f"{value:.6f}".rstrip("0").rstrip(".")
-            if float(s) >= 1:
-                if "." in s:
-                    int_part, dec_part = s.split(".")
-                    int_part = f"{int(int_part):,}".replace(",", ".")
-                    s = f"{int_part}.{dec_part}"
-                else:
-                    s = f"{int(s):,}".replace(",", ".")
-            return s
-    except Exception:
-        return str(value)
+        url = f"{MEXC_BASE_URL}/api/v1/contract/ticker"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                if not data or "data" not in data:
+                    return []
+                tickers = data["data"]
 
+                coins = []
+                for t in tickers:
+                    if not t.get("symbol", "").endswith("_USDT"):
+                        continue
+                    last_price = float(t["lastPrice"])
+                    if last_price < 0.01:
+                        continue
+                    coins.append({
+                        "symbol": t["symbol"],
+                        "lastPrice": last_price,
+                        "volume": float(t.get("amount24", 0)),
+                        "change_pct": float(t.get("riseFallRate", 0)) * 100
+                    })
 
-# =============================
-# Notice trước khi ra tín hiệu
-# =============================
-async def job_trade_signals_notice(_=None):
-    try:
-        state = get_state()
-        if not state["is_on"]:
-            return
-        await bot.send_message(
-            chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch, chuẩn bị sẵn sàng nhé!"
-        )
+                coins.sort(key=lambda x: x["volume"], reverse=True)
+                return coins[:limit]
     except Exception as e:
-        print(f"[ERROR] job_trade_signals_notice: {e}")
-
-
-# =============================
-# Tạo tín hiệu giao dịch
-# =============================
-async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode="USD", vnd_rate=None):
-    try:
-        signal = await analyze_coin_signal_v2(coin)
-        if not signal or signal["entry"] <= 0:
-            return None
-
-        entry_price = format_price(signal["entry"], currency_mode, vnd_rate)
-        tp_price = format_price(signal["tp"], currency_mode, vnd_rate)
-        sl_price = format_price(signal["sl"], currency_mode, vnd_rate)
-
-        symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
-        side_icon = "🟩 LONG" if signal["direction"] == "LONG" else "🟥 SHORT"
-
-        if signal["strength"] >= 70:
-            label = "⭐ TÍN HIỆU MẠNH ⭐"
-        elif signal["strength"] <= 60:
-            label = "⚠️ THAM KHẢO ⚠️"
-        else:
-            label = ""
-
-        msg = (
-            f"{label}\n"
-            f"📈 {symbol_display}\n"
-            f"{side_icon}\n"
-            f"📌 Chế độ: {mode.upper()}\n"
-            f"📑 Loại lệnh: {signal['orderType']}\n"
-            f"💰 Entry: {entry_price} {currency_mode}\n"
-            f"🎯 TP: {tp_price} {currency_mode}\n"
-            f"🛡️ SL: {sl_price} {currency_mode}\n"
-            f"📊 Độ mạnh: {signal['strength']}%\n"
-            f"📌 Lý do:\n{signal['reason']}\n"
-            f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
-        )
-        return msg
-    except Exception as e:
-        print(f"[ERROR] create_trade_signal: {e}")
+        print(f"[ERROR] get_top30_futures: {e}")
         print(traceback.format_exc())
+        return []
+
+
+# =============================
+# Lấy Kline để phân tích
+# =============================
+async def fetch_klines(symbol: str, limit: int = 100):
+    try:
+        url = f"{MEXC_BASE_URL}/api/v1/contract/kline/{symbol}?interval=Min1&limit={limit}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                if "data" not in data:
+                    return []
+                return [float(k[4]) for k in data["data"]]  # close price
+    except Exception as e:
+        print(f"[ERROR] fetch_klines({symbol}): {e}")
+        return []
+
+
+# =============================
+# RSI
+# =============================
+def calculate_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return 50
+    deltas = np.diff(closes)
+    ups = deltas[deltas > 0].sum() / period
+    downs = -deltas[deltas < 0].sum() / period
+    rs = ups / downs if downs != 0 else 0
+    return 100 - (100 / (1 + rs))
+
+
+# =============================
+# Market sentiment (long/short %)
+# =============================
+async def get_market_sentiment():
+    try:
+        coins = await get_top30_futures(limit=30)
+        if not coins:
+            return {"long": 50, "short": 50}
+        ups = sum(1 for c in coins if c["change_pct"] >= 0)
+        downs = len(coins) - ups
+        total = max(1, ups + downs)
+        return {
+            "long": round(ups / total * 100, 2),
+            "short": round(downs / total * 100, 2)
+        }
+    except Exception:
+        return {"long": 50, "short": 50}
+
+
+# =============================
+# Signal Generator V2 (thoáng)
+# =============================
+async def analyze_coin_signal_v2(coin: dict, market_trend: str = "LONG") -> dict | None:
+    symbol = coin["symbol"]
+    last_price = coin["lastPrice"]
+    change_pct = coin["change_pct"]
+
+    closes = await fetch_klines(symbol, limit=100)
+    if not closes or len(closes) < 30:
         return None
 
+    # Indicators
+    rsi = calculate_rsi(closes, 14)
+    ma5, ma20 = np.mean(closes[-5:]), np.mean(closes[-20:])
 
-# =============================
-# Gửi tín hiệu giao dịch
-# =============================
-async def job_trade_signals(_=None):
-    global _last_selected
-    try:
-        state = get_state()
-        if not state["is_on"]:
-            return
+    # Xác định hướng vào lệnh theo xu hướng thị trường
+    side = market_trend
+    if market_trend == "LONG" and change_pct < 0:
+        return None
+    if market_trend == "SHORT" and change_pct > 0:
+        return None
 
-        currency_mode = state.get("currency_mode", "USD")
-        vnd_rate = None
-        if currency_mode == "VND":
-            vnd_rate = await get_usdt_vnd_rate()
-            if not vnd_rate or vnd_rate <= 0:
-                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                       text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy.")
-                return
+    # ATR tính biên độ dao động
+    highs = np.array(closes[-20:]) * 1.002
+    lows = np.array(closes[-20:]) * 0.998
+    tr = np.maximum(highs - lows,
+                    np.abs(highs - closes[-2]),
+                    np.abs(lows - closes[-2]))
+    atr = np.mean(tr) if len(tr) > 0 else last_price * 0.005
 
-        all_coins = await get_top20_futures(limit=20)
-        sentiment = await get_market_sentiment()
-        if not all_coins:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không lấy được dữ liệu coin từ sàn.")
-            return
+    entry_price = last_price
+    if side == "LONG":
+        tp_price, sl_price = entry_price + 2 * atr, entry_price - 1.5 * atr
+    else:
+        tp_price, sl_price = entry_price - 2 * atr, entry_price + 1.5 * atr
 
-        market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
-        candidates = [c for c in all_coins if (c["change_pct"] >= 0 if market_trend == "LONG" else c["change_pct"] < 0)]
+    # Strength chỉ mang tính tham khảo, không quá gắt
+    strength = 50
+    if (side == "LONG" and rsi < 40) or (side == "SHORT" and rsi > 60):
+        strength += 20
+    if abs(change_pct) > 1:
+        strength += 10
 
-        # Ưu tiên volume cao nhất → chọn 5 coin đầu
-        selected = sorted(candidates, key=lambda x: x["volume"], reverse=True)[:5]
+    strength = min(100, max(40, strength))  # không thấp hơn 40
 
-        if not selected:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có tín hiệu hợp lệ trong phiên này.")
-            return
+    label = "⭐ Tín hiệu theo trend ⭐" if strength >= 60 else "Tín hiệu"
 
-        _last_selected = selected
-        messages = []
-        for i, coin in enumerate(selected):
-            mode = "SCALPING" if i < 3 else "SWING"
-            msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
-            if msg:
-                messages.append(msg)
-
-        if messages:
-            for m in messages:
-                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=m)
-        else:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có tín hiệu hợp lệ trong phiên này.")
-    except Exception as e:
-        print(f"[ERROR] job_trade_signals: {e}")
-        print(traceback.format_exc())
-
-
-# =============================
-# Setup job vào job_queue
-# =============================
-def setup_jobs(application):
-    tz = pytz.timezone("Asia/Ho_Chi_Minh")
-
-    application.job_queue.run_daily(job_morning_message, time=time(6, 0, 0, tzinfo=tz))
-    application.job_queue.run_daily(job_evening_summary, time=time(22, 0, 0, tzinfo=tz))
-
-    for h in range(6, 22):
-        for m in [15, 45]:
-            application.job_queue.run_daily(job_trade_signals_notice, time=time(h, m - 1, 0, tzinfo=tz))
-            application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
-
-    print("✅ Scheduler đã setup thành công!")
+    return {
+        "symbol": symbol,
+        "direction": side,
+        "orderType": "MARKET",
+        "entry": round(entry_price, 4),
+        "tp": round(tp_price, 4),
+        "sl": round(sl_price, 4),
+        "strength": strength,
+        "reason": f"{label} | RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f} "
+                  f"| Δ {change_pct:.2f}% | Trend={market_trend}"
+    }
