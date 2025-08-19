@@ -5,7 +5,7 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     analyze_coin_signal_v2,
-    get_top20_futures,
+    get_top30_futures,     # 🔥 đổi sang top30
     get_market_sentiment,
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
@@ -64,9 +64,10 @@ async def job_trade_signals_notice(_=None):
 # =============================
 # Tạo tín hiệu giao dịch
 # =============================
-async def create_trade_signal(coin: dict, mode: str = "SCALPING", currency_mode="USD", vnd_rate=None):
+async def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPING",
+                              currency_mode="USD", vnd_rate=None):
     try:
-        signal = await analyze_coin_signal_v2(coin)
+        signal = await analyze_coin_signal_v2(coin, market_trend)
         if not signal or signal["entry"] <= 0:
             return None
 
@@ -123,17 +124,23 @@ async def job_trade_signals(_=None):
                                        text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy.")
                 return
 
-        all_coins = await get_top20_futures(limit=20)
+        all_coins = await get_top30_futures(limit=30)   # 🔥 đổi sang top30
         sentiment = await get_market_sentiment()
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
+        # Xác định xu hướng thị trường
         market_trend = "LONG" if sentiment["long"] > sentiment["short"] else "SHORT"
-        candidates = [c for c in all_coins if (c["change_pct"] >= 0 if market_trend == "LONG" else c["change_pct"] < 0)]
 
-        # Ưu tiên volume cao nhất → chọn 5 coin đầu
+        # Chọn coin cùng chiều trend
+        candidates = [
+            c for c in all_coins
+            if (c["change_pct"] >= 0 if market_trend == "LONG" else c["change_pct"] < 0)
+        ]
+
+        # Ưu tiên volume cao → chọn 5 coin đầu tiên
         selected = sorted(candidates, key=lambda x: x["volume"], reverse=True)[:5]
 
         if not selected:
@@ -145,7 +152,7 @@ async def job_trade_signals(_=None):
         messages = []
         for i, coin in enumerate(selected):
             mode = "SCALPING" if i < 3 else "SWING"
-            msg = await create_trade_signal(coin, mode, currency_mode, vnd_rate)
+            msg = await create_trade_signal(coin, market_trend, mode, currency_mode, vnd_rate)
             if msg:
                 messages.append(msg)
 
