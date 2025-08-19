@@ -87,3 +87,61 @@ async def get_market_sentiment():
         }
     except Exception:
         return {"long": 50, "short": 50}
+
+
+# =============================
+# Phân tích xu hướng thị trường (cho Daily)
+# =============================
+async def analyze_market_trend(limit: int = 20):
+    """
+    Dùng cho daily_reports để hiển thị:
+    - % Long / Short
+    - Xu hướng (TĂNG / GIẢM / Sideway)
+    - Top coin nổi bật
+    """
+    try:
+        coins = await get_top_futures(limit=limit)
+        if not coins:
+            return {
+                "long": 50.0,
+                "short": 50.0,
+                "trend": "❓ Không xác định",
+                "top": []
+            }
+
+        ups = [c for c in coins if c["change_pct"] > 0]
+        downs = [c for c in coins if c["change_pct"] < 0]
+
+        total = len(ups) + len(downs)
+        if total == 0:
+            long_pct, short_pct = 50.0, 50.0
+        else:
+            long_pct = round(len(ups) / total * 100, 1)
+            short_pct = round(len(downs) / total * 100, 1)
+
+        # Xác định xu hướng
+        if long_pct > short_pct + 5:  # lệch 5% trở lên coi là có trend
+            trend = "📈 Xu hướng TĂNG (phe LONG chiếm ưu thế)"
+        elif short_pct > long_pct + 5:
+            trend = "📉 Xu hướng GIẢM (phe SHORT chiếm ưu thế)"
+        else:
+            trend = "⚖️ Thị trường sideway"
+
+        # Lấy top coin biến động mạnh
+        top = sorted(coins, key=lambda x: abs(x.get("change_pct", 0)), reverse=True)[:5]
+
+        return {
+            "long": long_pct,
+            "short": short_pct,
+            "trend": trend,
+            "top": top
+        }
+    except Exception as e:
+        print(f"[ERROR] analyze_market_trend: {e}")
+        print(traceback.format_exc())
+        return {
+            "long": 50.0,
+            "short": 50.0,
+            "trend": "❓ Không xác định",
+            "top": []
+        }
