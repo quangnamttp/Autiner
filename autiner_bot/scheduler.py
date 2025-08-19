@@ -62,12 +62,24 @@ async def job_trade_signals_notice(_=None):
 
 
 # =============================
-# Tạo tín hiệu giao dịch
+# Tạo tín hiệu giao dịch (có TP/SL)
 # =============================
 def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPING",
                         currency_mode="USD", vnd_rate=None, sideway=False):
     try:
-        entry_price = format_price(coin["lastPrice"], currency_mode, vnd_rate)
+        entry_raw = coin["lastPrice"]
+        entry_price = format_price(entry_raw, currency_mode, vnd_rate)
+
+        # Tính TP/SL: Scalping ±1%, Swing ±2%
+        if mode.upper() == "SCALPING":
+            tp_val = entry_raw * (1.01 if market_trend == "LONG" else 0.99)
+            sl_val = entry_raw * (0.99 if market_trend == "LONG" else 1.01)
+        else:  # SWING
+            tp_val = entry_raw * (1.02 if market_trend == "LONG" else 0.98)
+            sl_val = entry_raw * (0.98 if market_trend == "LONG" else 1.02)
+
+        tp = format_price(tp_val, currency_mode, vnd_rate)
+        sl = format_price(sl_val, currency_mode, vnd_rate)
 
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
         side_icon = "🟩 LONG" if market_trend == "LONG" else "🟥 SHORT"
@@ -83,6 +95,8 @@ def create_trade_signal(coin: dict, market_trend: str, mode: str = "SCALPING",
             f"{side_icon}\n"
             f"📌 Chế độ: {mode.upper()}\n"
             f"💰 Entry: {entry_price} {currency_mode}\n"
+            f"🎯 TP: {tp} {currency_mode}\n"
+            f"🛑 SL: {sl} {currency_mode}\n"
             f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
         )
         return msg
@@ -111,7 +125,7 @@ async def job_trade_signals(_=None):
                                        text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy.")
                 return
 
-        all_coins = await get_top_futures(limit=15)   # 🔥 chỉ lấy top 15
+        all_coins = await get_top_futures(limit=15)   # 🔥 chỉ lấy top 15 realtime
         sentiment = await get_market_sentiment()
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
@@ -159,9 +173,11 @@ async def job_trade_signals(_=None):
 def setup_jobs(application):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
 
+    # Daily sáng / tối
     application.job_queue.run_daily(job_morning_message, time=time(6, 0, 0, tzinfo=tz))
     application.job_queue.run_daily(job_evening_summary, time=time(22, 0, 0, tzinfo=tz))
 
+    # Tín hiệu mỗi 30 phút (06:15 → 21:45)
     for h in range(6, 22):
         for m in [15, 45]:
             application.job_queue.run_daily(job_trade_signals_notice, time=time(h, m - 1, 0, tzinfo=tz))
