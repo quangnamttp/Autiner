@@ -124,8 +124,8 @@ async def analyze_coin_signal_v2(coin: dict) -> dict | None:
     change_pct = coin["change_pct"]
     volume = coin.get("volume", 0)
 
-    # 1. Lọc coin rác
-    if last_price < 0.01 or volume < 1_000_000:
+    # 1. Lọc coin rác (chỉ lọc giá siêu nhỏ)
+    if last_price < 0.001:
         return None
 
     closes = await fetch_klines(symbol, limit=100)
@@ -160,11 +160,11 @@ async def analyze_coin_signal_v2(coin: dict) -> dict | None:
         tp_price, sl_price = entry_price - 2 * atr, entry_price + 1.5 * atr
 
     # 4. Strength
-    strength = 50
+    strength = 45  # base thấp để luôn ra tín hiệu
     if abs(change_pct) >= 2:
         strength += 15
-    if volume >= 10_000_000:
-        strength += 15
+    if volume >= 5_000_000:
+        strength += 10
     if side == "LONG" and rsi < 35:
         strength += 10
     if side == "SHORT" and rsi > 65:
@@ -174,14 +174,20 @@ async def analyze_coin_signal_v2(coin: dict) -> dict | None:
 
     ma_diff = abs(ma5 - ma20) / ma20 * 100
     if ma_diff < 0.2 and 40 < rsi < 60:
-        return None  # sideways
+        strength -= 15
+        reason_note = "⚠️ Sideways"
+    else:
+        reason_note = ""
 
-    strength = min(100, max(0, strength))
+    strength = min(100, max(30, strength))  # không dưới 30%
 
-    if strength < 55:
-        return None
-
-    label = "⭐ Tín hiệu mạnh" if strength >= 70 else "Tín hiệu"
+    # 5. Label
+    if strength >= 70:
+        label = "⭐ Tín hiệu mạnh"
+    elif strength >= 55:
+        label = "Tín hiệu"
+    else:
+        label = "⚠️ Tham khảo"
 
     return {
         "symbol": symbol,
@@ -192,5 +198,5 @@ async def analyze_coin_signal_v2(coin: dict) -> dict | None:
         "sl": round(sl_price, 4),
         "strength": strength,
         "reason": f"{label} | RSI={rsi:.1f} | MA5={ma5:.4f}, MA20={ma20:.4f}, MA50={ma50:.4f} "
-                  f"| Δ {change_pct:.2f}% | Vol={volume:,} | Trend={trend}"
+                  f"| Δ {change_pct:.2f}% | Vol={volume:,} | Trend={trend} {reason_note}"
     }
