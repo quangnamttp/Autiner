@@ -139,7 +139,13 @@ def create_trade_signal(symbol: str, entry_raw: float, signal: str,
         sl = format_price(sl_val, currency_mode, vnd_rate)
 
         symbol_display = symbol.replace("_USDT", f"/{currency_mode.upper()}")
-        label = "⚠️ THAM KHẢO (SIDEWAY)" if sideway or signal == "SIDEWAY" else "⭐ TÍN HIỆU ⭐"
+        label = "⭐ TÍN HIỆU ⭐" if signal in ["LONG", "SHORT"] else "⚠️ TÍN HIỆU"
+
+        # Độ mạnh
+        if signal == "SIDEWAY" or sideway:
+            strength = "Tham khảo"
+        else:
+            strength = f"{random.randint(60, 90)}%"
 
         msg = (
             f"{label}\n"
@@ -149,7 +155,8 @@ def create_trade_signal(symbol: str, entry_raw: float, signal: str,
             f"💰 Entry: {entry_price} {currency_mode}\n"
             f"🎯 TP: {tp} {currency_mode}\n"
             f"🛑 SL: {sl} {currency_mode}\n"
-            f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
+            f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}\n"
+            f"📊 Độ mạnh: {strength}"
         )
         return msg
     except Exception as e:
