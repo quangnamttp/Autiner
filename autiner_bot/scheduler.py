@@ -54,12 +54,14 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
 # =============================
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
-        return 50
+        return 50.0
     deltas = np.diff(prices)
     gains = deltas.clip(min=0)
     losses = -deltas.clip(max=0)
-    avg_gain = gains[-period:].mean() if len(gains) >= period else gains.mean() if gains.size else 0
-    avg_loss = losses[-period:].mean() if len(losses) >= period else losses.mean() if losses.size else 0
+    if gains.size == 0 and losses.size == 0:
+        return 50.0
+    avg_gain = gains[-period:].mean() if len(gains) >= period else gains.mean()
+    avg_loss = losses[-period:].mean() if len(losses) >= period else losses.mean()
     if avg_loss == 0:
         return 100.0
     rs = avg_gain / avg_loss
@@ -74,11 +76,11 @@ def calculate_ma(prices, period=20):
 
 def analyze_signal(coin_klines: list):
     """
-    Trả về LONG / SHORT / SIDEWAY dựa vào RSI + MA (thoáng hơn):
-    - RSI > 65 và giá > MA20  -> LONG
-    - RSI < 35 và giá < MA20  -> SHORT
-    - Nếu trung tính: dùng giá so với MA20 làm quyết định
-    - Chỉ trả SIDEWAY khi dữ liệu quá ít (<10 nến)
+    LONG / SHORT / SIDEWAY (thoáng):
+      - RSI ≥ 62 và giá ≥ MA20  -> LONG
+      - RSI ≤ 38 và giá ≤ MA20  -> SHORT
+      - Trung tính -> theo giá so với MA20
+      - SIDEWAY khi nến < 10 hoặc |last - MA20|/MA20 < 0.1%
     """
     try:
         if not coin_klines or len(coin_klines) < 10:
@@ -89,13 +91,16 @@ def analyze_signal(coin_klines: list):
         ma20 = calculate_ma(closes, period=20)
         last_price = closes[-1]
 
-        # Quy tắc thoáng
-        if rsi >= 65 and last_price >= ma20:
+        # Siêu phẳng quanh MA20 -> sideway
+        if ma20 > 0 and abs(last_price - ma20) / ma20 < 0.001:
+            return "SIDEWAY"
+
+        if rsi >= 62 and last_price >= ma20:
             return "LONG"
-        if rsi <= 35 and last_price <= ma20:
+        if rsi <= 38 and last_price <= ma20:
             return "SHORT"
 
-        # Trung tính -> ưu tiên giá so với MA20 để ra hướng
+        # Trung tính: ưu tiên giá so với MA20
         if last_price > ma20:
             return "LONG"
         if last_price < ma20:
@@ -141,7 +146,6 @@ def create_trade_signal(symbol: str, entry_raw: float, signal: str,
             sl_val = entry_raw * (1.01 if mode.upper() == "SCALPING" else 1.02)
             side_icon = "🟥 SHORT"
         else:
-            # SIDEWAY vẫn gửi, gắn nhãn tham khảo
             tp_val = entry_raw
             sl_val = entry_raw
             side_icon = "⚠️ SIDEWAY"
@@ -152,7 +156,7 @@ def create_trade_signal(symbol: str, entry_raw: float, signal: str,
         symbol_display = symbol.replace("_USDT", f"/{currency_mode.upper()}")
         label = "⭐ TÍN HIỆU ⭐"
 
-        # Độ mạnh
+        # Độ mạnh: chỉ 'Tham khảo' khi chính tín hiệu SIDEWAY hoặc weak=True
         strength = "Tham khảo" if (weak or signal == "SIDEWAY") else f"{random.randint(60, 90)}%"
 
         msg = (
@@ -192,14 +196,13 @@ async def job_trade_signals(_=None):
                 return
 
         all_coins = await get_top_futures(limit=15)
-        sentiment = await get_market_sentiment()
+        # vẫn lấy sentiment nếu bạn cần thống kê nơi khác; KHÔNG dùng để gắn 'Tham khảo'
+        _ = await get_market_sentiment()
+
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
-
-        # Thị trường sideway dùng để gắn nhãn 'Tham khảo' nếu muốn
-        market_sideway = abs(sentiment["long"] - sentiment["short"]) <= 10
 
         # chọn 5 coin ngẫu nhiên trong top 15
         selected = random.sample(all_coins, min(5, len(all_coins)))
@@ -212,31 +215,14 @@ async def job_trade_signals(_=None):
         messages = []
 
         for i, coin in enumerate(selected):
-            # Lấy nến Min5 (thoáng)
+            # LẤY NẾN THẬT – KHÔNG FALLBACK
             data = await get_coin_data(coin["symbol"], interval="Min5", limit=60)
-
-            # Nếu không có nến → vẫn gửi theo biến động hiện tại, gắn 'Tham khảo'
             if not data or not data.get("klines"):
-                fallback_side = "LONG" if coin.get("change_pct", 0) >= 0 else "SHORT"
-                mode = "SCALPING" if i < 3 else "SWING"
-                msg = create_trade_signal(
-                    coin["symbol"],
-                    coin["lastPrice"],
-                    fallback_side,
-                    mode,
-                    currency_mode,
-                    vnd_rate,
-                    weak=True  # đánh dấu tham khảo
-                )
-                if msg:
-                    messages.append(msg)
+                # không fallback theo yêu cầu trade thật -> bỏ qua coin này
                 continue
 
-            # Có nến → phân tích RSI + MA (thoáng)
             signal = analyze_signal(data["klines"])
-
-            # Nếu SIDEWAY → vẫn bắn, strength = Tham khảo
-            weak_flag = (signal == "SIDEWAY") or market_sideway
+            weak_flag = (signal == "SIDEWAY")  # chỉ tham khảo khi chính coin sideway
 
             mode = "SCALPING" if i < 3 else "SWING"
             msg = create_trade_signal(
