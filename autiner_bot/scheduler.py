@@ -50,7 +50,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
 
 
 # =============================
-# Chỉ báo kỹ thuật (RSI, MA, Volume)
+# Chỉ báo kỹ thuật (RSI, MA)
 # =============================
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
@@ -72,23 +72,21 @@ def calculate_ma(prices, period=20):
 
 def analyze_signal(coin_klines: list):
     """
-    Trả về LONG / SHORT / SIDEWAY dựa vào RSI + MA + Volume
+    Trả về LONG / SHORT / SIDEWAY dựa vào RSI + MA (bỏ volume cho thoáng)
     """
     try:
         closes = [k["close"] for k in coin_klines]
-        volumes = [k["volume"] for k in coin_klines]
         if len(closes) < 20:
             return "SIDEWAY"
 
         rsi = calculate_rsi(closes, period=14)
         ma20 = calculate_ma(closes, period=20)
         last_price = closes[-1]
-        last_vol = volumes[-1]
-        avg_vol = np.mean(volumes[-20:])
 
-        if rsi > 70 and last_price < ma20 and last_vol > avg_vol:
+        # Quy tắc thoáng hơn (65/35 thay vì 70/30)
+        if rsi > 65 and last_price < ma20:
             return "SHORT"
-        elif rsi < 30 and last_price > ma20 and last_vol > avg_vol:
+        elif rsi < 35 and last_price > ma20:
             return "LONG"
         else:
             return "SIDEWAY"
