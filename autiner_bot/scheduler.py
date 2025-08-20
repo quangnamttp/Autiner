@@ -196,8 +196,7 @@ async def job_trade_signals(_=None):
                 return
 
         all_coins = await get_top_futures(limit=15)
-        # vẫn lấy sentiment nếu bạn cần thống kê nơi khác; KHÔNG dùng để gắn 'Tham khảo'
-        _ = await get_market_sentiment()
+        _ = await get_market_sentiment()  # giữ nguyên nếu cần nơi khác
 
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
@@ -215,11 +214,13 @@ async def job_trade_signals(_=None):
         messages = []
 
         for i, coin in enumerate(selected):
-            # LẤY NẾN THẬT – KHÔNG FALLBACK
-            data = await get_coin_data(coin["symbol"], interval="Min5", limit=60)
-            if not data or not data.get("klines"):
-                # không fallback theo yêu cầu trade thật -> bỏ qua coin này
-                continue
+            # LẤY NẾN THẬT – KHÔNG GIẢ LẬP
+            data = await get_coin_data(coin["symbol"], interval="Min1", limit=60)
+            if (not data) or (not data.get("klines")):
+                # thử thêm timeframe khác (dữ liệu thật)
+                data = await get_coin_data(coin["symbol"], interval="Min5", limit=60)
+                if (not data) or (not data.get("klines")):
+                    continue  # vẫn bỏ qua nếu không có nến
 
             signal = analyze_signal(data["klines"])
             weak_flag = (signal == "SIDEWAY")  # chỉ tham khảo khi chính coin sideway
