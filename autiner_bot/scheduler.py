@@ -61,20 +61,19 @@ async def job_trade_signals_notice(_=None):
         print(f"[ERROR] job_trade_signals_notice: {e}")
 
 # =============================
-# Tạo tín hiệu giao dịch (theo hướng price change)
-# Sideway chỉ khi |change_pct| < 0.5% → ghi 'Tham khảo'
+# Tạo tín hiệu giao dịch (theo change_pct)
+# SIDEWAY khi |change_pct| < 0.5%  → Độ mạnh: Tham khảo
 # =============================
 def create_trade_signal(coin: dict, mode: str = "SCALPING",
                         currency_mode="USD", vnd_rate=None, market_sideway=False):
     try:
-        entry_raw = coin["lastPrice"]
+        entry_raw = float(coin["lastPrice"])
         entry_price = format_price(entry_raw, currency_mode, vnd_rate)
 
         change = float(coin.get("change_pct", 0.0))
         abs_change = abs(change)
 
-        # Xác định hướng
-        if abs_change < 0.5:  # sideway thật thoáng: chỉ khi gần như đứng yên
+        if abs_change < 0.5:
             signal_side = "SIDEWAY"
             side_icon = "⚠️ SIDEWAY"
         else:
@@ -92,9 +91,7 @@ def create_trade_signal(coin: dict, mode: str = "SCALPING",
         elif signal_side == "SHORT":
             tp_val = entry_raw * (0.99 if mode.upper() == "SCALPING" else 0.98)
             sl_val = entry_raw * (1.01 if mode.upper() == "SCALPING" else 1.02)
-        else:
-            # SIDEWAY vẫn đưa số liệu để ai muốn “ăn rung” thì cân nhắc,
-            # nhưng ghi Độ mạnh: Tham khảo.
+        else:  # SIDEWAY
             tp_val = entry_raw
             sl_val = entry_raw
 
@@ -103,14 +100,8 @@ def create_trade_signal(coin: dict, mode: str = "SCALPING",
 
         symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
 
-        # Độ mạnh
-        if signal_side == "SIDEWAY":
-            strength = "Tham khảo"
-        else:
-            # Nếu thị trường chung rất cân bằng bạn muốn vẫn mạnh → chỉ dựa vào coin
-            strength = f"{random.randint(70, 95)}%"
+        strength = "Tham khảo" if signal_side == "SIDEWAY" else f"{random.randint(70, 95)}%"
 
-        # Không dùng nhãn ⭐ ở đầu để gọn mắt
         msg = (
             f"📈 {symbol_display}\n"
             f"{side_icon}\n"
@@ -146,19 +137,17 @@ async def job_trade_signals(_=None):
                                        text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy.")
                 return
 
-        all_coins = await get_top_futures(limit=15)   # top 15 realtime
-        sentiment = await get_market_sentiment()
+        all_coins = await get_top_futures(limit=15)
+        # vẫn gọi để theo dõi chung nhưng KHÔNG ép nhãn
+        _ = await get_market_sentiment()
+
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
-        # Thị trường chung sideway (chỉ để tham khảo thống kê, KHÔNG ép nhãn)
-        market_sideway = abs(sentiment["long"] - sentiment["short"]) <= 10
-
-        # Luôn chọn 5 coin (nếu sàn trả <5 thì lấy hết)
+        # Luôn cố gắng gửi 5 lệnh
         selected = random.sample(all_coins, min(5, len(all_coins)))
-
         if not selected:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không có tín hiệu hợp lệ trong phiên này.")
@@ -166,12 +155,17 @@ async def job_trade_signals(_=None):
 
         _last_selected = selected
 
+        sent = 0
         for i, coin in enumerate(selected):
-            mode = "SCALPING" if i < 5 else "SWING"  # 5 lệnh/đợt → tất cả SCALPING
-            msg = create_trade_signal(coin, mode, currency_mode, vnd_rate, market_sideway)
+            mode = "SCALPING"  # 5 lệnh/đợt: tất cả SCALPING
+            msg = create_trade_signal(coin, mode, currency_mode, vnd_rate, False)
             if msg:
-                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=mmsg)
-        # Nếu vì lý do nào đó message không được tạo (hiếm), vẫn đảm bảo có thông báo
+                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+                sent += 1
+
+        if sent == 0:
+            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+                                   text="⚠️ Không có tín hiệu hợp lệ trong phiên này.")
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
