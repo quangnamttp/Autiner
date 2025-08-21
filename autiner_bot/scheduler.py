@@ -1,3 +1,5 @@
+# autiner_bot/scheduler.py
+
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
@@ -5,8 +7,7 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
-    get_market_sentiment,
-    get_kline,   # ✅ đổi từ get_klines → get_kline
+    get_kline,   # đã có trong mexc
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -46,7 +47,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
         return str(value)
 
 # =============================
-# Chỉ báo: MA, RSI, Volume
+# Chỉ báo: MA, RSI
 # =============================
 def sma(values, period=20):
     if len(values) < period:
@@ -74,34 +75,34 @@ def rsi(values, period=14):
         rsi_vals[i] = 100. - 100. / (1. + rs)
     return float(rsi_vals[-1])
 
+# =============================
+# Quyết định LONG/SHORT cực kỳ thoáng
+# =============================
 def decide_direction_with_indicators(klines: list) -> tuple[str, bool]:
     if not klines:
         return (None, True)
 
     closes = [k["close"] for k in klines]
-    volumes = [k["volume"] for k in klines]
-
     if len(closes) < 20:
         return (None, True)
 
     ma20 = sma(closes, 20)
     last_close = closes[-1]
     rsi_val = rsi(closes, 14)
-    vol_ma20 = sma(volumes, 20)
-    last_vol = volumes[-1]
 
-    weak = False
-    near_ma = abs(last_close - ma20) / ma20 < 0.002  # ±0.2%
-    in_rsi_mid = 45 <= rsi_val <= 55
-    if near_ma or in_rsi_mid:
-        weak = True
+    # Điều kiện mạnh
+    if last_close > ma20 and rsi_val > 55:
+        return ("LONG", False)
+    elif last_close < ma20 and rsi_val < 45:
+        return ("SHORT", False)
 
-    if last_close > ma20 and rsi_val > 45 and last_vol >= 0.8 * vol_ma20:
-        return ("LONG", weak)
-    elif last_close < ma20 and rsi_val < 55 and last_vol >= 0.8 * vol_ma20:
-        return ("SHORT", weak)
-    else:
-        return (None, True)
+    # fallback: theo MA, nhưng yếu
+    if last_close > ma20:
+        return ("LONG", True)
+    elif last_close < ma20:
+        return ("SHORT", True)
+
+    return (None, True)
 
 # =============================
 # Notice trước khi ra tín hiệu
@@ -183,7 +184,7 @@ async def job_trade_signals(_=None):
         _last_selected = selected
 
         for coin in selected:
-            klines = await get_kline(coin["symbol"], interval="Min5", limit=50)  # ✅ sửa get_klines → get_kline
+            klines = await get_kline(coin["symbol"], limit=50)
             side, weak = decide_direction_with_indicators(klines)
             if not side:
                 continue
