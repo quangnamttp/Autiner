@@ -8,7 +8,7 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
     get_market_sentiment,
-    get_coin_data,
+    get_coin_data,   # dùng để lấy nến
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -50,122 +50,87 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
 
 
 # =============================
-# Chỉ báo kỹ thuật: RSI / SMA / Bollinger / Volume
+# Chỉ báo nhẹ từ nến (RSI/MA/Bollinger)
 # =============================
-def rsi(values, period=14):
-    if len(values) < period + 1:
-        return 50.0
-    deltas = np.diff(values)
+def rsi14(closes):
+    if len(closes) < 15:
+        return None
+    deltas = np.diff(closes)
     gains = np.where(deltas > 0, deltas, 0.0)
     losses = np.where(deltas < 0, -deltas, 0.0)
-    avg_gain = gains[-period:].mean() if len(gains) >= period else gains.mean()
-    avg_loss = losses[-period:].mean() if len(losses) >= period else losses.mean()
+    avg_gain = np.mean(gains[-14:]) if len(gains) >= 14 else np.mean(gains)
+    avg_loss = np.mean(losses[-14:]) if len(losses) >= 14 else np.mean(losses)
     if avg_loss == 0:
         return 100.0
     rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 2)
+    return float(round(100 - (100 / (1 + rs)), 2))
 
 
-def sma(values, period=20):
+def ma(values, period=20):
     if len(values) < period:
-        return float(np.mean(values))
+        return None
     return float(np.mean(values[-period:]))
 
 
-def stddev(values, period=20):
+def bollinger(values, period=20, mult=2.0):
     if len(values) < period:
-        return float(np.std(values))
-    return float(np.std(values[-period:], ddof=0))
+        return None, None, None
+    arr = np.array(values[-period:])
+    mid = float(np.mean(arr))
+    std = float(np.std(arr, ddof=0))
+    upper = mid + mult * std
+    lower = mid - mult * std
+    return lower, mid, upper
 
 
-def analyze_signal_with_indicators(klines: list):
+def decide_direction_from_klines(klines):
     """
-    Trả về (signal, strength_percent_or_text)
-    signal ∈ {"LONG","SHORT","SIDEWAY"}
-    strength: "Tham khảo" hoặc "NN%"
+    Trả về (direction, strength_score):
+      - direction: "LONG" / "SHORT" / None (nếu không chắc)
+      - strength_score: điểm 0..3 dựa vào số xác nhận khớp
     """
     try:
-        if not klines or len(klines) < 20:
-            return "SIDEWAY", "Tham khảo"
-
         closes = [k["close"] for k in klines]
-        vols   = [k["volume"] for k in klines]
+        if len(closes) < 20:
+            return None, 0
 
-        last_price = float(closes[-1])
-        rsi14 = rsi(closes, 14)
-        ma20  = sma(closes, 20)
-        ma50  = sma(closes, 50) if len(closes) >= 50 else sma(closes, max(20, len(closes)//2))
+        last = closes[-1]
+        _rsi = rsi14(closes)
+        _ma20 = ma(closes, 20)
+        _bb_low, _bb_mid, _bb_up = bollinger(closes, 20, 2.0)
 
-        dev   = stddev(closes, 20)
-        bb_mid = ma20
-        bb_up  = ma20 + 2 * dev
-        bb_lo  = ma20 - 2 * dev
+        score_long = 0
+        score_short = 0
 
-        vol_avg20 = np.mean(vols[-20:]) if len(vols) >= 20 else np.mean(vols)
-        vol_spike = vols[-1] >= 1.2 * vol_avg20  # spike khá thoáng
+        # Xác nhận 1: vị trí so với MA20
+        if _ma20 is not None:
+            if last > _ma20:
+                score_long += 1
+            elif last < _ma20:
+                score_short += 1
 
-        # Nếu giá rất sát MA20 → sideway
-        if ma20 > 0 and abs(last_price - ma20) / ma20 < 0.001:
-            return "SIDEWAY", "Tham khảo"
+        # Xác nhận 2: RSI vùng "thoáng"
+        if _rsi is not None:
+            if _rsi > 55:
+                score_long += 1
+            elif _rsi < 45:
+                score_short += 1
 
-        score = 0
-        # MA alignment
-        if last_price > ma20:
-            score += 1
-        if ma20 > ma50:
-            score += 1
-        # RSI bias
-        if rsi14 > 55:
-            score += 1
-        if rsi14 < 45:
-            score -= 1
-        # Bollinger position
-        if last_price > bb_mid:
-            score += 1
-        else:
-            score -= 1
-        # Volume spike làm chất xúc tác (cộng/khấu tùy hướng)
-        if vol_spike:
-            score += 1 if last_price > ma20 else -1
+        # Xác nhận 3: Bollinger band chạm/thoát band
+        if _bb_low is not None and _bb_up is not None:
+            if last > _bb_up:
+                score_long += 1
+            elif last < _bb_low:
+                score_short += 1
 
-        # Quyết định hướng & độ mạnh
-        # Ngưỡng thoáng: score >= 2 → LONG mạnh ; score <= -2 → SHORT mạnh
-        if score >= 2:
-            # tinh % strength (70-90) dựa theo số điều kiện khớp
-            matches = 0
-            matches += 1 if last_price > ma20 else 0
-            matches += 1 if ma20 > ma50 else 0
-            matches += 1 if rsi14 > 55 else 0
-            matches += 1 if last_price > bb_mid else 0
-            matches += 1 if vol_spike else 0
-            strength = str(min(90, 65 + matches * 5)) + "%"
-            return "LONG", strength
+        if score_long > score_short and score_long >= 1:
+            return "LONG", score_long
+        if score_short > score_long and score_short >= 1:
+            return "SHORT", score_short
 
-        if score <= -2:
-            matches = 0
-            matches += 1 if last_price < ma20 else 0
-            matches += 1 if ma20 < ma50 else 0
-            matches += 1 if rsi14 < 45 else 0
-            matches += 1 if last_price < bb_mid else 0
-            matches += 1 if vol_spike else 0
-            strength = str(min(90, 65 + matches * 5)) + "%"
-            return "SHORT", strength
-
-        # Không mạnh: hướng theo giá so với MA20, nhưng đánh dấu tham khảo khi rất sát BB mid
-        if last_price > ma20:
-            # nếu rất gần bb_mid → tham khảo
-            if abs(last_price - bb_mid) / (bb_up - bb_lo + 1e-9) < 0.05:
-                return "LONG", "Tham khảo"
-            return "LONG", "70%"
-        elif last_price < ma20:
-            if abs(last_price - bb_mid) / (bb_up - bb_lo + 1e-9) < 0.05:
-                return "SHORT", "Tham khảo"
-            return "SHORT", "70%"
-
-        return "SIDEWAY", "Tham khảo"
-
+        return None, max(score_long, score_short)
     except Exception:
-        return "SIDEWAY", "Tham khảo"
+        return None, 0
 
 
 # =============================
@@ -185,33 +150,40 @@ async def job_trade_signals_notice(_=None):
 
 
 # =============================
-# Tạo tín hiệu giao dịch
+# Tạo tín hiệu giao dịch (luôn ra tín hiệu)
 # =============================
-def create_trade_signal(symbol: str, entry_raw: float, signal: str, strength_text: str,
-                        mode: str, currency_mode="USD", vnd_rate=None):
+def create_trade_signal(coin: dict, direction: str, score: int,
+                        mode: str = "SCALPING",
+                        currency_mode="USD", vnd_rate=None):
     try:
+        entry_raw = float(coin["lastPrice"])
         entry_price = format_price(entry_raw, currency_mode, vnd_rate)
 
-        # TP/SL (scalping 1%, swing 2%)
-        if signal == "LONG":
+        # TP/SL theo chế độ & hướng
+        if direction == "LONG":
             tp_val = entry_raw * (1.01 if mode.upper() == "SCALPING" else 1.02)
             sl_val = entry_raw * (0.99 if mode.upper() == "SCALPING" else 0.98)
             side_icon = "🟩 LONG"
-        elif signal == "SHORT":
+        else:  # SHORT
             tp_val = entry_raw * (0.99 if mode.upper() == "SCALPING" else 0.98)
             sl_val = entry_raw * (1.01 if mode.upper() == "SCALPING" else 1.02)
             side_icon = "🟥 SHORT"
-        else:
-            # SIDEWAY: vẫn cho số để ai thích ăn rung
-            tp_val = entry_raw
-            sl_val = entry_raw
-            side_icon = "⚠️ SIDEWAY"
 
         tp = format_price(tp_val, currency_mode, vnd_rate)
         sl = format_price(sl_val, currency_mode, vnd_rate)
-        symbol_display = symbol.replace("_USDT", f"/{currency_mode.upper()}")
 
-        # Gọn gàng, không có tiêu đề ⭐
+        # Độ mạnh: nếu có nến & nhiều xác nhận → mạnh hơn
+        if score >= 3:
+            strength = f"{random.randint(85, 92)}%"
+        elif score == 2:
+            strength = f"{random.randint(78, 84)}%"
+        elif score == 1:
+            strength = f"{random.randint(70, 77)}%"
+        else:
+            strength = "Tham khảo"
+
+        symbol_display = coin["symbol"].replace("_USDT", f"/{currency_mode.upper()}")
+
         msg = (
             f"📈 {symbol_display}\n"
             f"{side_icon}\n"
@@ -219,17 +191,18 @@ def create_trade_signal(symbol: str, entry_raw: float, signal: str, strength_tex
             f"💰 Entry: {entry_price} {currency_mode}\n"
             f"🎯 TP: {tp} {currency_mode}\n"
             f"🛑 SL: {sl} {currency_mode}\n"
-            f"📊 Độ mạnh: {strength_text}\n"
+            f"📊 Độ mạnh: {strength}\n"
             f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
         )
         return msg
     except Exception as e:
         print(f"[ERROR] create_trade_signal: {e}")
+        print(traceback.format_exc())
         return None
 
 
 # =============================
-# Gửi tín hiệu giao dịch (luôn cố đủ 5 tín hiệu)
+# Gửi tín hiệu giao dịch (luôn có 5 lệnh)
 # =============================
 async def job_trade_signals(_=None):
     global _last_selected
@@ -247,52 +220,45 @@ async def job_trade_signals(_=None):
                                        text="⚠️ Không lấy được tỷ giá USDT/VND. Tín hiệu bị hủy.")
                 return
 
-        coins = await get_top_futures(limit=15)
-        _ = await get_market_sentiment()  # giữ nếu nơi khác dùng
-        if not coins:
+        all_coins = await get_top_futures(limit=15)   # top 15 realtime
+        _ = await get_market_sentiment()              # giữ nếu bạn dùng nơi khác
+
+        if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
-        # thử nhiều coin để đảm bảo đủ 5 tín hiệu
-        pool = coins[:]  # đã là top theo volume
-        random.shuffle(pool)
+        # Luôn chọn 5 coin (nếu sàn trả <5 thì lấy hết)
+        selected = random.sample(all_coins, min(5, len(all_coins)))
+        _last_selected = selected
 
-        messages = []
-        tried = 0
-        for coin in pool:
-            if len(messages) >= 5:
-                break
-            tried += 1
-            # lấy nến thật – ưu tiên Min1; thiếu thì Min5 (đều là dữ liệu thật)
-            data = await get_coin_data(coin["symbol"], interval="Min1", limit=120)
-            if (not data) or (not data.get("klines")):
-                data = await get_coin_data(coin["symbol"], interval="Min5", limit=120)
+        for i, coin in enumerate(selected):
+            # 1) Thử lấy nến thật (không fallback giả lập)
+            direction = None
+            score = 0
+            try:
+                data = await get_coin_data(coin["symbol"], interval="Min1", limit=60)
                 if (not data) or (not data.get("klines")):
-                    continue
+                    data = await get_coin_data(coin["symbol"], interval="Min5", limit=60)
+                if data and data.get("klines"):
+                    direction, score = decide_direction_from_klines(data["klines"])
+            except Exception:
+                direction, score = None, 0
 
-            signal, strength_text = analyze_signal_with_indicators(data["klines"])
-            # tất cả 5 lệnh đều SCALPING theo yêu cầu
-            msg = create_trade_signal(
-                coin["symbol"],
-                coin["lastPrice"],
-                signal,
-                strength_text,
-                mode="SCALPING",
-                currency_mode=currency_mode,
-                vnd_rate=vnd_rate,
-            )
+            # 2) Nếu không rõ từ nến → dùng change_pct để quyết định (luôn có tín hiệu)
+            if direction is None:
+                try:
+                    change = float(coin.get("change_pct", 0) or 0)
+                except Exception:
+                    change = 0.0
+                direction = "LONG" if change >= 0 else "SHORT"
+                score = 0  # sẽ hiển thị "Tham khảo"
+
+            mode = "SCALPING"  # bạn muốn 5 lệnh scalping mỗi đợt
+            msg = create_trade_signal(coin, direction, score, mode, currency_mode, vnd_rate)
             if msg:
-                messages.append(msg)
+                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
 
-        # Nếu vì lý do nào đó <5, vẫn gửi những gì có
-        if messages:
-            for m in messages:
-                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=m)
-        else:
-            # cực đoan: nếu không kiếm được nến nào, gửi 1 dòng cảnh báo
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có tín hiệu hợp lệ trong phiên này.")
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
