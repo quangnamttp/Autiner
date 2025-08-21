@@ -7,7 +7,7 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
-    get_kline,   # đã có trong mexc
+    get_kline,   # đã có hàm nến
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -47,7 +47,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
         return str(value)
 
 # =============================
-# Chỉ báo: MA, RSI
+# Chỉ báo cơ bản
 # =============================
 def sma(values, period=20):
     if len(values) < period:
@@ -76,33 +76,25 @@ def rsi(values, period=14):
     return float(rsi_vals[-1])
 
 # =============================
-# Quyết định LONG/SHORT cực kỳ thoáng
+# Quyết định LONG/SHORT (siêu thoáng)
 # =============================
 def decide_direction_with_indicators(klines: list) -> tuple[str, bool]:
     if not klines:
-        return (None, True)
+        return ("LONG", True)  # fallback để vẫn có tín hiệu test
 
     closes = [k["close"] for k in klines]
     if len(closes) < 20:
-        return (None, True)
+        return ("LONG", True)
 
     ma20 = sma(closes, 20)
     last_close = closes[-1]
     rsi_val = rsi(closes, 14)
 
-    # Điều kiện mạnh
-    if last_close > ma20 and rsi_val > 55:
-        return ("LONG", False)
-    elif last_close < ma20 and rsi_val < 45:
-        return ("SHORT", False)
-
-    # fallback: theo MA, nhưng yếu
+    # Nếu mạnh thì gắn %
     if last_close > ma20:
-        return ("LONG", True)
-    elif last_close < ma20:
-        return ("SHORT", True)
-
-    return (None, True)
+        return ("LONG", False if rsi_val > 50 else True)
+    else:
+        return ("SHORT", False if rsi_val < 50 else True)
 
 # =============================
 # Notice trước khi ra tín hiệu
@@ -186,8 +178,6 @@ async def job_trade_signals(_=None):
         for coin in selected:
             klines = await get_kline(coin["symbol"], limit=50)
             side, weak = decide_direction_with_indicators(klines)
-            if not side:
-                continue
             msg = create_trade_signal(
                 symbol=coin["symbol"],
                 side=side,
