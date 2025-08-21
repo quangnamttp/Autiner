@@ -1,5 +1,3 @@
-# autiner_bot/scheduler.py
-
 from telegram import Bot
 from autiner_bot.settings import S
 from autiner_bot.utils.state import get_state
@@ -8,7 +6,7 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
     get_market_sentiment,
-    get_klines,   # cần có hàm lấy nến
+    get_kline,   # ✅ đổi từ get_klines → get_kline
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -185,7 +183,7 @@ async def job_trade_signals(_=None):
         _last_selected = selected
 
         for coin in selected:
-            klines = await get_klines(coin["symbol"], limit=50)
+            klines = await get_kline(coin["symbol"], interval="Min5", limit=50)  # ✅ sửa get_klines → get_kline
             side, weak = decide_direction_with_indicators(klines)
             if not side:
                 continue
