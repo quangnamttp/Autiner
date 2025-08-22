@@ -222,20 +222,21 @@ async def job_trade_signals(_=None):
             orderbook = await get_orderbook(coin["symbol"])
             side, weak, reason, diff = decide_direction(klines, funding, orderbook)
 
-            if not weak:
-                coin_signals.append({
-                    "symbol": coin["symbol"],
-                    "side": side,
-                    "reason": reason,
-                    "strength": diff,
-                    "lastPrice": coin["lastPrice"],
-                })
+            coin_signals.append({
+                "symbol": coin["symbol"],
+                "side": side,
+                "reason": reason,
+                "strength": diff,
+                "lastPrice": coin["lastPrice"],
+                "weak": weak
+            })
 
         if not coin_signals:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có coin nào có tín hiệu rõ ràng.")
+                                   text="⚠️ Không có tín hiệu nào khả dụng.")
             return
 
+        # Ưu tiên coin mạnh
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
@@ -247,11 +248,11 @@ async def job_trade_signals(_=None):
                 mode="Scalping",
                 currency_mode=currency_mode,
                 vnd_rate=vnd_rate,
-                weak=False,
+                weak=coin["weak"],
                 reason=coin["reason"],
                 strength=round(coin["strength"], 2)
             )
-            if idx == 0:
+            if idx == 0 and not coin["weak"]:
                 msg = msg.replace("📈", "📈⭐", 1)
             if msg:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
