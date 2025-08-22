@@ -7,7 +7,7 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
-    get_kline,   # đã có hàm nến
+    get_kline,
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -47,12 +47,16 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
         return str(value)
 
 # =============================
-# Chỉ báo cơ bản
+# EMA & RSI
 # =============================
-def sma(values, period=20):
-    if len(values) < period:
-        return float(np.mean(values)) if values else 0.0
-    return float(np.mean(values[-period:]))
+def ema(values, period=9):
+    if not values or len(values) < period:
+        return values[-1] if values else 0
+    k = 2 / (period + 1)
+    ema_val = values[0]
+    for price in values[1:]:
+        ema_val = price * k + ema_val * (1 - k)
+    return ema_val
 
 def rsi(values, period=14):
     if len(values) < period + 1:
@@ -76,25 +80,32 @@ def rsi(values, period=14):
     return float(rsi_vals[-1])
 
 # =============================
-# Quyết định LONG/SHORT (siêu thoáng)
+# Quyết định LONG/SHORT
 # =============================
-def decide_direction_with_indicators(klines: list) -> tuple[str, bool]:
+def decide_direction_with_indicators(klines: list) -> tuple[str, bool, str]:
+    """
+    return: (side, weak, reason)
+    """
     if not klines:
-        return ("LONG", True)  # fallback để vẫn có tín hiệu test
+        return ("LONG", True, "No data")
 
     closes = [k["close"] for k in klines]
-    if len(closes) < 20:
-        return ("LONG", True)
+    if len(closes) < 34:
+        return ("LONG", True, "Not enough data")
 
-    ma20 = sma(closes, 20)
-    last_close = closes[-1]
+    ema9 = ema(closes, 9)
+    ema21 = ema(closes, 21)
     rsi_val = rsi(closes, 14)
 
-    # Nếu mạnh thì gắn %
-    if last_close > ma20:
-        return ("LONG", False if rsi_val > 50 else True)
+    reason = f"EMA9={ema9:.4f}, EMA21={ema21:.4f}, RSI={rsi_val:.1f}"
+
+    # Quyết định
+    if ema9 > ema21 and rsi_val > 55:
+        return ("LONG", False, reason)
+    elif ema9 < ema21 and rsi_val < 45:
+        return ("SHORT", False, reason)
     else:
-        return ("SHORT", False if rsi_val < 50 else True)
+        return ("LONG", True, reason) if rsi_val >= 50 else ("SHORT", True, reason)
 
 # =============================
 # Notice trước khi ra tín hiệu
@@ -115,6 +126,7 @@ async def job_trade_signals_notice(_=None):
 # Tạo tín hiệu giao dịch
 # =============================
 def create_trade_signal(symbol: str, side: str, entry_raw: float,
+                        reason: str,
                         mode="SCALPING", currency_mode="USD",
                         vnd_rate=None, weak=False):
     try:
@@ -135,15 +147,19 @@ def create_trade_signal(symbol: str, side: str, entry_raw: float,
         symbol_display = symbol.replace("_USDT", f"/{currency_mode.upper()}")
         strength = "Tham khảo" if weak else f"{random.randint(70,95)}%"
 
+        # Biểu tượng side
+        side_icon = "🟢" if side == "LONG" else "🟥"
+
         msg = (
-            f"📈 {symbol_display}\n"
-            f"{side}\n"
-            f"📌 Chế độ: {mode}\n"
+            f"📈 {symbol_display} — {side_icon} {side}\n\n"
+            f"🟢 Loại lệnh: {mode.capitalize()}\n"
+            f"🔹 Kiểu vào lệnh: Market\n"
             f"💰 Entry: {entry_price} {currency_mode}\n"
             f"🎯 TP: {tp} {currency_mode}\n"
-            f"🛑 SL: {sl} {currency_mode}\n"
+            f"🛡️ SL: {sl} {currency_mode}\n"
             f"📊 Độ mạnh: {strength}\n"
-            f"🕒 {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
+            f"📌 Lý do: {reason}\n"
+            f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
         )
         return msg
     except Exception as e:
@@ -175,19 +191,25 @@ async def job_trade_signals(_=None):
         selected = random.sample(all_coins, min(5, len(all_coins)))
         _last_selected = selected
 
-        for coin in selected:
+        # Chọn 1 tín hiệu mạnh nhất gắn sao ⭐
+        best_index = random.randint(0, len(selected) - 1)
+
+        for idx, coin in enumerate(selected):
             klines = await get_kline(coin["symbol"], limit=50)
-            side, weak = decide_direction_with_indicators(klines)
+            side, weak, reason = decide_direction_with_indicators(klines)
             msg = create_trade_signal(
                 symbol=coin["symbol"],
                 side=side,
                 entry_raw=coin["lastPrice"],
+                reason=reason,
                 mode="SCALPING",
                 currency_mode=currency_mode,
                 vnd_rate=vnd_rate,
                 weak=weak
             )
             if msg:
+                if idx == best_index and not weak:
+                    msg = "⭐ Tín hiệu nổi bật\n" + msg
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
@@ -202,6 +224,7 @@ def setup_jobs(application):
     application.job_queue.run_daily(job_morning_message, time=time(6, 0, 0, tzinfo=tz))
     application.job_queue.run_daily(job_evening_summary, time=time(22, 0, 0, tzinfo=tz))
 
+    # Tín hiệu từ 6h15 đến 21h45, mỗi 30 phút
     for h in range(6, 22):
         for m in [15, 45]:
             application.job_queue.run_daily(job_trade_signals_notice, time=time(h, m - 1, 0, tzinfo=tz))
