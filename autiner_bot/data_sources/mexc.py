@@ -1,7 +1,6 @@
 import aiohttp
 import numpy as np
 import traceback
-import random
 
 MEXC_BASE_URL = "https://contract.mexc.com"
 
@@ -93,12 +92,6 @@ async def get_market_sentiment():
 # Phân tích xu hướng thị trường (cho Daily)
 # =============================
 async def analyze_market_trend(limit: int = 20):
-    """
-    Dùng cho daily_reports để hiển thị:
-    - % Long / Short
-    - Xu hướng (TĂNG / GIẢM / Sideway)
-    - Top coin nổi bật
-    """
     try:
         coins = await get_top_futures(limit=limit)
         if not coins:
@@ -151,10 +144,6 @@ async def analyze_market_trend(limit: int = 20):
 # Lấy dữ liệu nến (kline)
 # =============================
 async def get_kline(symbol: str, interval: str = "Min1", limit: int = 100):
-    """
-    Lấy dữ liệu nến (OHLCV) cho 1 coin từ MEXC
-    interval: Min1, Min5, Min15, Min30, Hour1, Hour4, Day1 ...
-    """
     try:
         url = f"{MEXC_BASE_URL}/api/v1/contract/kline/{symbol}?interval={interval}&limit={limit}"
         async with aiohttp.ClientSession() as session:
@@ -162,7 +151,6 @@ async def get_kline(symbol: str, interval: str = "Min1", limit: int = 100):
                 data = await resp.json()
                 if not data or "data" not in data:
                     return []
-                # Trả về dạng list [{time, open, high, low, close, volume}]
                 klines = []
                 for k in data["data"]:
                     klines.append({
@@ -184,11 +172,6 @@ async def get_kline(symbol: str, interval: str = "Min1", limit: int = 100):
 # Lấy dữ liệu coin cụ thể (kết hợp ticker + nến)
 # =============================
 async def get_coin_data(symbol: str, interval: str = "Min1", limit: int = 100):
-    """
-    Lấy dữ liệu chi tiết 1 coin:
-    - Ticker (last price, change_pct, volume)
-    - Nến (OHLCV)
-    """
     try:
         coins = await get_top_futures(limit=200)
         ticker = next((c for c in coins if c["symbol"] == symbol), None)
@@ -199,3 +182,49 @@ async def get_coin_data(symbol: str, interval: str = "Min1", limit: int = 100):
     except Exception as e:
         print(f"[ERROR] get_coin_data({symbol}): {e}")
         return None
+
+
+# =============================
+# Phân tích xu hướng 1 coin (EMA + RSI)
+# =============================
+def calc_ema(values, period):
+    if len(values) < period:
+        return sum(values) / len(values)
+    k = 2 / (period + 1)
+    ema_val = values[0]
+    for v in values[1:]:
+        ema_val = v * k + ema_val * (1 - k)
+    return ema_val
+
+def calc_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return 50
+    deltas = np.diff(closes)
+    ups = deltas[deltas > 0].sum() / period
+    downs = -deltas[deltas < 0].sum() / period
+    rs = ups / downs if downs != 0 else 0
+    return 100 - (100 / (1 + rs))
+
+async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
+    klines = await get_kline(symbol, interval, limit)
+    if not klines or len(klines) < 20:
+        return {"side": "LONG", "strength": 0, "reason": "No data", "is_weak": True}
+
+    closes = [k["close"] for k in klines]
+    ema6 = calc_ema(closes, 6)
+    ema12 = calc_ema(closes, 12)
+    rsi = calc_rsi(closes, 14)
+    last = closes[-1]
+
+    diff = abs(ema6 - ema12) / last * 100
+    reason = f"EMA6={ema6:.2f}, EMA12={ema12:.2f}, RSI={rsi:.1f}, Close={last:.2f}"
+
+    if diff < 0.2:
+        return {"side": "LONG", "strength": 0, "reason": f"Sideway ({reason})", "is_weak": True}
+
+    if ema6 > ema12 and rsi > 55:
+        return {"side": "LONG", "strength": diff, "reason": reason, "is_weak": False}
+    elif ema6 < ema12 and rsi < 45:
+        return {"side": "SHORT", "strength": diff, "reason": reason, "is_weak": False}
+    else:
+        return {"side": "LONG", "strength": 0, "reason": f"Không rõ trend ({reason})", "is_weak": True}
