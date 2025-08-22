@@ -15,7 +15,7 @@ from datetime import time
 import numpy as np
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
-_last_selected = []
+
 
 # =============================
 # Format giá
@@ -43,6 +43,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
     except Exception:
         return str(value)
 
+
 # =============================
 # EMA
 # =============================
@@ -55,49 +56,33 @@ def ema(values, period):
         ema_val = v * k + ema_val * (1 - k)
     return ema_val
 
-# =============================
-# RSI
-# =============================
-def rsi(closes, period=14):
-    if len(closes) < period + 1:
-        return 50
-    deltas = np.diff(closes)
-    ups = deltas[deltas > 0].sum() / period
-    downs = -deltas[deltas < 0].sum() / period
-    rs = ups / downs if downs != 0 else 0
-    return 100 - (100 / (1 + rs))
 
 # =============================
-# Đánh giá tín hiệu nâng cao
+# Quyết định LONG/SHORT
 # =============================
-def analyze_signal(klines: list):
-    if not klines or len(klines) < 20:
+def decide_direction_with_ema(klines: list) -> tuple[str, bool, str, float]:
+    if not klines or len(klines) < 12:
         return ("LONG", True, "No data", 0)
 
     closes = [k["close"] for k in klines]
-    vols = [k["volume"] for k in klines]
 
     ema6 = ema(closes, 6)
     ema12 = ema(closes, 12)
     last = closes[-1]
-    rsi_val = rsi(closes, 14)
-    vol_ratio = vols[-1] / (np.mean(vols[-10:]) + 1e-9)
 
-    # Xu hướng EMA
+    diff = abs(ema6 - ema12) / last * 100  # %
+    reason = f"EMA6={ema6:.4f}, EMA12={ema12:.4f}, Close={last:.4f}"
+
+    if diff < 0.2:  # dưới 0.2% coi là sideway
+        return ("LONG", True, f"Sideway ({reason})", diff)
+
     if ema6 > ema12:
-        side = "LONG"
+        return ("LONG", False, reason, diff)
+    elif ema6 < ema12:
+        return ("SHORT", False, reason, diff)
     else:
-        side = "SHORT"
+        return ("LONG", True, "No trend", diff)
 
-    # Độ mạnh = EMA diff + Volume + RSI factor
-    diff = abs(ema6 - ema12) / last * 100
-    rsi_factor = 1 if 45 <= rsi_val <= 65 else 0.7
-    strength = diff * vol_ratio * rsi_factor
-
-    weak = strength < 0.2  # quá yếu coi như tham khảo
-    reason = f"EMA6={ema6:.4f}, EMA12={ema12:.4f}, RSI={rsi_val:.2f}, VolRatio={vol_ratio:.2f}"
-
-    return (side, weak, reason, strength)
 
 # =============================
 # Notice trước khi ra tín hiệu
@@ -113,6 +98,7 @@ async def job_trade_signals_notice(_=None):
         )
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
+
 
 # =============================
 # Tạo tín hiệu giao dịch
@@ -153,18 +139,20 @@ def create_trade_signal(symbol: str, side: str, entry_raw: float,
     except Exception:
         return None
 
+
 # =============================
-# Gửi tín hiệu giao dịch (top 5 coin mạnh nhất)
+# Gửi tín hiệu giao dịch
 # =============================
 async def job_trade_signals(_=None):
-    global _last_selected
     try:
         state = get_state()
         if not state["is_on"]:
             return
 
         currency_mode = state.get("currency_mode", "USD")
-        vnd_rate = await get_usdt_vnd_rate() if currency_mode == "VND" else None
+        vnd_rate = None
+        if currency_mode == "VND":
+            vnd_rate = await get_usdt_vnd_rate()
 
         all_coins = await get_top_futures(limit=15)
         if not all_coins:
@@ -172,36 +160,48 @@ async def job_trade_signals(_=None):
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
-        evaluated = []
+        # lưu lại coin + strength
+        coin_signals = []
         for coin in all_coins:
-            klines = await get_kline(coin["symbol"], limit=50, interval="Min15")
-            side, weak, reason, strength = analyze_signal(klines)
-            evaluated.append((coin, side, weak, reason, strength))
+            klines = await get_kline(coin["symbol"], limit=10, interval="Min15")
+            side, weak, reason, diff = decide_direction_with_ema(klines)
 
-        # chọn top 5 coin strength cao nhất
-        evaluated.sort(key=lambda x: x[4], reverse=True)
-        selected = evaluated[:5]
-        _last_selected = [s[0] for s in selected]
+            if not weak:  # chỉ lấy coin có xu hướng rõ
+                coin_signals.append({
+                    "symbol": coin["symbol"],
+                    "side": side,
+                    "reason": reason,
+                    "strength": diff,
+                    "lastPrice": coin["lastPrice"],
+                })
+
+        if not coin_signals:
+            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+                                   text="⚠️ Không có coin nào có xu hướng rõ ràng.")
+            return
+
+        # sắp xếp theo strength giảm dần
+        coin_signals.sort(key=lambda x: x["strength"], reverse=True)
+        top5 = coin_signals[:5]
 
         messages = []
-        for coin, side, weak, reason, strength in selected:
+        for idx, coin in enumerate(top5):
             msg = create_trade_signal(
                 symbol=coin["symbol"],
-                side=side,
+                side=coin["side"],
                 entry_raw=coin["lastPrice"],
                 mode="Scalping",
                 currency_mode=currency_mode,
                 vnd_rate=vnd_rate,
-                weak=weak,
-                reason=reason,
-                strength=round(strength, 2)
+                weak=False,
+                reason=coin["reason"],
+                strength=round(coin["strength"], 2)
             )
+            if idx == 0:  # coin mạnh nhất
+                msg = msg.replace("📈", "📈⭐", 1)
             messages.append(msg)
 
-        # gắn sao ⭐ cho tín hiệu mạnh nhất
-        if messages:
-            messages[0] = messages[0].replace("📈", "📈⭐", 1)
-
+        # gửi tin nhắn
         for msg in messages:
             if msg:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
@@ -209,6 +209,7 @@ async def job_trade_signals(_=None):
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
+
 
 # =============================
 # Setup job vào job_queue
