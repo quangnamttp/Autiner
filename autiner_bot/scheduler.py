@@ -82,7 +82,7 @@ def macd(values, fast=12, slow=26, signal=9):
 # =============================
 # Quyết định xu hướng
 # =============================
-def decide_direction(klines: list, funding: float, orderbook: dict) -> tuple[str, bool, str, float]:
+def decide_direction(klines: list, funding: float, orderbook: dict):
     if not klines or len(klines) < 30:
         return ("LONG", True, "Không đủ dữ liệu", 0)
 
@@ -105,21 +105,23 @@ def decide_direction(klines: list, funding: float, orderbook: dict) -> tuple[str
     else:
         return ("LONG", True, "Không rõ xu hướng", diff)
 
+    weak = False
+
     # RSI filter
     if trend == "LONG" and rsi_val > 70:
         reason_parts.append("RSI quá mua")
-        return (trend, True, ", ".join(reason_parts), diff)
+        weak = True
     if trend == "SHORT" and rsi_val < 30:
         reason_parts.append("RSI quá bán")
-        return (trend, True, ", ".join(reason_parts), diff)
+        weak = True
 
     # MACD confirm
     if trend == "LONG" and macd_val < macd_signal:
         reason_parts.append("MACD chưa xác nhận")
-        return (trend, True, ", ".join(reason_parts), diff)
+        weak = True
     if trend == "SHORT" and macd_val > macd_signal:
         reason_parts.append("MACD chưa xác nhận")
-        return (trend, True, ", ".join(reason_parts), diff)
+        weak = True
 
     # Funding bias
     if funding > 0.1:
@@ -136,7 +138,7 @@ def decide_direction(klines: list, funding: float, orderbook: dict) -> tuple[str
         elif asks / bids > 1.1:
             reason_parts.append("Áp lực bán")
 
-    return (trend, False, ", ".join(reason_parts), diff)
+    return (trend, weak, ", ".join(reason_parts), diff)
 
 
 # =============================
@@ -158,7 +160,7 @@ async def job_trade_signals_notice(_=None):
 # =============================
 # Tạo tín hiệu giao dịch
 # =============================
-def create_trade_signal(symbol: str, side: str, entry_raw: float,
+def create_trade_signal(symbol, side, entry_raw,
                         mode="Scalping", currency_mode="USD",
                         vnd_rate=None, weak=False, reason="No data", strength=0):
     try:
@@ -233,10 +235,10 @@ async def job_trade_signals(_=None):
 
         if not coin_signals:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có tín hiệu nào khả dụng.")
+                                   text="⚠️ Không có coin nào có tín hiệu.")
             return
 
-        # Ưu tiên coin mạnh
+        # sắp xếp theo strength
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
