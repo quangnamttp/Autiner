@@ -89,7 +89,7 @@ async def job_evening_summary(_=None):
         for c in market["top"][:5]:
             msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
 
-        msg += "\n📊 Hiệu suất lệnh sẽ được tổng hợp trong bản nâng cấp sau. 🚀"
+        msg += "\n📊 Đến giờ nghĩ ngơi bạn hãy kiểm tra lại và chốt lệnh quản lí vốn thật tốt để mai bắt đầu công việc. Chúc bạn ngủ ngon. 🚀"
 
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
