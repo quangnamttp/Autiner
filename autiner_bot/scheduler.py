@@ -12,7 +12,6 @@ from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summ
 import traceback
 import pytz
 from datetime import time
-import random
 import numpy as np
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
@@ -57,30 +56,48 @@ def ema(values, period):
     return ema_val
 
 # =============================
-# Quyết định LONG/SHORT
+# RSI
 # =============================
-def decide_direction_with_ema(klines: list) -> tuple[str, bool, str, float]:
-    if not klines or len(klines) < 10:   # ⬅️ đổi từ 12 -> 10
+def rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return 50
+    deltas = np.diff(closes)
+    ups = deltas[deltas > 0].sum() / period
+    downs = -deltas[deltas < 0].sum() / period
+    rs = ups / downs if downs != 0 else 0
+    return 100 - (100 / (1 + rs))
+
+# =============================
+# Đánh giá tín hiệu nâng cao
+# =============================
+def analyze_signal(klines: list):
+    if not klines or len(klines) < 20:
         return ("LONG", True, "No data", 0)
 
     closes = [k["close"] for k in klines]
+    vols = [k["volume"] for k in klines]
 
     ema6 = ema(closes, 6)
     ema12 = ema(closes, 12)
     last = closes[-1]
+    rsi_val = rsi(closes, 14)
+    vol_ratio = vols[-1] / (np.mean(vols[-10:]) + 1e-9)
 
-    diff = abs(ema6 - ema12) / last * 100  # %
-    reason = f"EMA6={ema6:.4f}, EMA12={ema12:.4f}, Close={last:.4f}"
-
-    if diff < 0.3:  # dưới 0.3% coi là sideway
-        return ("LONG", True, f"Sideway ({reason})", diff)
-
+    # Xu hướng EMA
     if ema6 > ema12:
-        return ("LONG", False, reason, diff)
-    elif ema6 < ema12:
-        return ("SHORT", False, reason, diff)
+        side = "LONG"
     else:
-        return ("LONG", True, "No trend", diff)
+        side = "SHORT"
+
+    # Độ mạnh = EMA diff + Volume + RSI factor
+    diff = abs(ema6 - ema12) / last * 100
+    rsi_factor = 1 if 45 <= rsi_val <= 65 else 0.7
+    strength = diff * vol_ratio * rsi_factor
+
+    weak = strength < 0.2  # quá yếu coi như tham khảo
+    reason = f"EMA6={ema6:.4f}, EMA12={ema12:.4f}, RSI={rsi_val:.2f}, VolRatio={vol_ratio:.2f}"
+
+    return (side, weak, reason, strength)
 
 # =============================
 # Notice trước khi ra tín hiệu
@@ -137,7 +154,7 @@ def create_trade_signal(symbol: str, side: str, entry_raw: float,
         return None
 
 # =============================
-# Gửi tín hiệu giao dịch
+# Gửi tín hiệu giao dịch (top 5 coin mạnh nhất)
 # =============================
 async def job_trade_signals(_=None):
     global _last_selected
@@ -147,9 +164,7 @@ async def job_trade_signals(_=None):
             return
 
         currency_mode = state.get("currency_mode", "USD")
-        vnd_rate = None
-        if currency_mode == "VND":
-            vnd_rate = await get_usdt_vnd_rate()
+        vnd_rate = await get_usdt_vnd_rate() if currency_mode == "VND" else None
 
         all_coins = await get_top_futures(limit=15)
         if not all_coins:
@@ -157,20 +172,19 @@ async def job_trade_signals(_=None):
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
-        selected = random.sample(all_coins, min(5, len(all_coins)))
-        _last_selected = selected
+        evaluated = []
+        for coin in all_coins:
+            klines = await get_kline(coin["symbol"], limit=50, interval="Min15")
+            side, weak, reason, strength = analyze_signal(klines)
+            evaluated.append((coin, side, weak, reason, strength))
+
+        # chọn top 5 coin strength cao nhất
+        evaluated.sort(key=lambda x: x[4], reverse=True)
+        selected = evaluated[:5]
+        _last_selected = [s[0] for s in selected]
 
         messages = []
-        strengths = []
-
-        for coin in selected:
-            # chỉ lấy 10 nến gần nhất
-            klines = await get_kline(coin["symbol"], limit=10, interval="Min15")
-            side, weak, reason, diff = decide_direction_with_ema(klines)
-
-            strength_val = 0 if weak else diff
-            strengths.append(strength_val)
-
+        for coin, side, weak, reason, strength in selected:
             msg = create_trade_signal(
                 symbol=coin["symbol"],
                 side=side,
@@ -180,17 +194,14 @@ async def job_trade_signals(_=None):
                 vnd_rate=vnd_rate,
                 weak=weak,
                 reason=reason,
-                strength=round(strength_val, 2)
+                strength=round(strength, 2)
             )
             messages.append(msg)
 
-        # gắn sao cho tín hiệu mạnh nhất
-        if any(strengths):
-            max_idx = strengths.index(max(strengths))
-            if messages[max_idx]:
-                messages[max_idx] = messages[max_idx].replace("📈", "📈⭐", 1)
+        # gắn sao ⭐ cho tín hiệu mạnh nhất
+        if messages:
+            messages[0] = messages[0].replace("📈", "📈⭐", 1)
 
-        # gửi tin nhắn
         for msg in messages:
             if msg:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
