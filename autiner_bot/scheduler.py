@@ -60,7 +60,7 @@ def ema(values, period):
 # Quyết định LONG/SHORT
 # =============================
 def decide_direction_with_ema(klines: list) -> tuple[str, bool, str, float]:
-    if not klines or len(klines) < 12:
+    if not klines or len(klines) < 10:   # ⬅️ đổi từ 12 -> 10
         return ("LONG", True, "No data", 0)
 
     closes = [k["close"] for k in klines]
@@ -164,7 +164,8 @@ async def job_trade_signals(_=None):
         strengths = []
 
         for coin in selected:
-            klines = await get_kline(coin["symbol"], limit=50, interval="Min15")
+            # chỉ lấy 10 nến gần nhất
+            klines = await get_kline(coin["symbol"], limit=10, interval="Min15")
             side, weak, reason, diff = decide_direction_with_ema(klines)
 
             strength_val = 0 if weak else diff
