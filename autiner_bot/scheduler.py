@@ -6,6 +6,8 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
     get_kline,
+    get_funding_rate,
+    get_orderbook,
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -15,6 +17,7 @@ from datetime import time
 import numpy as np
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
+
 
 # =============================
 # Format giá
@@ -42,8 +45,9 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
     except Exception:
         return str(value)
 
+
 # =============================
-# EMA
+# EMA / RSI / MACD
 # =============================
 def ema(values, period):
     if not values or len(values) < period:
@@ -54,69 +58,86 @@ def ema(values, period):
         ema_val = v * k + ema_val * (1 - k)
     return ema_val
 
-# =============================
-# RSI
-# =============================
+
 def rsi(values, period=14):
     if len(values) < period + 1:
         return 50
     deltas = np.diff(values)
-    ups = deltas.clip(min=0)
-    downs = -1 * deltas.clip(max=0)
-    avg_gain = np.mean(ups[-period:])
-    avg_loss = np.mean(downs[-period:]) if np.mean(downs[-period:]) != 0 else 1e-10
-    rs = avg_gain / avg_loss
+    ups = deltas[deltas > 0].sum() / period
+    downs = -deltas[deltas < 0].sum() / period
+    rs = ups / downs if downs != 0 else 0
     return 100 - (100 / (1 + rs))
 
-# =============================
-# MACD
-# =============================
-def macd(values, short=12, long=26, signal=9):
-    if len(values) < long + signal:
+
+def macd(values, fast=12, slow=26, signal=9):
+    if len(values) < slow:
         return 0, 0
-    ema_short = ema(values, short)
-    ema_long = ema(values, long)
-    macd_line = ema_short - ema_long
-    signal_line = ema(values[-signal:], signal)
-    return macd_line, signal_line
+    ema_fast = ema(values, fast)
+    ema_slow = ema(values, slow)
+    macd_val = ema_fast - ema_slow
+    signal_val = ema(values, signal)
+    return macd_val, signal_val
+
 
 # =============================
-# Quyết định xu hướng với EMA + RSI + MACD
+# Quyết định xu hướng
 # =============================
-def decide_direction_with_indicators(klines: list):
-    if not klines or len(klines) < 26:
+def decide_direction(klines: list, funding: float, orderbook: dict) -> tuple[str, bool, str, float]:
+    if not klines or len(klines) < 30:
         return ("LONG", True, "Không đủ dữ liệu", 0)
 
     closes = [k["close"] for k in klines]
 
-    # EMA
     ema6 = ema(closes, 6)
     ema12 = ema(closes, 12)
-    last = closes[-1]
-    diff = abs(ema6 - ema12) / last * 100  # strength %
-
-    # RSI
     rsi_val = rsi(closes, 14)
+    macd_val, macd_signal = macd(closes)
 
-    # MACD
-    macd_line, signal_line = macd(closes)
+    last = closes[-1]
+    diff = abs(ema6 - ema12) / last * 100
+    reason_parts = [f"EMA6={ema6:.2f}, EMA12={ema12:.2f}", f"RSI={rsi_val:.1f}", f"MACD={macd_val:.4f}, Sig={macd_signal:.4f}"]
 
-    reason = f"EMA6={ema6:.4f}, EMA12={ema12:.4f}, RSI={rsi_val:.2f}, MACD={macd_line:.4f}, Signal={signal_line:.4f}"
-
-    # Xu hướng
+    # EMA trend
     if ema6 > ema12:
-        side = "LONG"
+        trend = "LONG"
+    elif ema6 < ema12:
+        trend = "SHORT"
     else:
-        side = "SHORT"
+        return ("LONG", True, "Không rõ xu hướng", diff)
 
-    # Kiểm tra sức mạnh xu hướng
-    strong = False
-    if side == "LONG" and rsi_val > 60 and macd_line > signal_line:
-        strong = True
-    elif side == "SHORT" and rsi_val < 40 and macd_line < signal_line:
-        strong = True
+    # RSI filter
+    if trend == "LONG" and rsi_val > 70:
+        reason_parts.append("RSI quá mua")
+        return (trend, True, ", ".join(reason_parts), diff)
+    if trend == "SHORT" and rsi_val < 30:
+        reason_parts.append("RSI quá bán")
+        return (trend, True, ", ".join(reason_parts), diff)
 
-    return (side, not strong, reason, diff)
+    # MACD confirm
+    if trend == "LONG" and macd_val < macd_signal:
+        reason_parts.append("MACD chưa xác nhận")
+        return (trend, True, ", ".join(reason_parts), diff)
+    if trend == "SHORT" and macd_val > macd_signal:
+        reason_parts.append("MACD chưa xác nhận")
+        return (trend, True, ", ".join(reason_parts), diff)
+
+    # Funding bias
+    if funding > 0.1:
+        reason_parts.append("Funding + (crowded LONG)")
+    elif funding < -0.1:
+        reason_parts.append("Funding - (crowded SHORT)")
+
+    # Orderbook check
+    if orderbook:
+        bids = orderbook.get("bids", 1)
+        asks = orderbook.get("asks", 1)
+        if bids / asks > 1.1:
+            reason_parts.append("Áp lực mua")
+        elif asks / bids > 1.1:
+            reason_parts.append("Áp lực bán")
+
+    return (trend, False, ", ".join(reason_parts), diff)
+
 
 # =============================
 # Notice trước khi ra tín hiệu
@@ -128,10 +149,11 @@ async def job_trade_signals_notice(_=None):
             return
         await bot.send_message(
             chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch, bạn hãy kiểm tra dữ liệu trước khi vào lệnh nhé!"
+            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch, chuẩn bị sẵn sàng nhé!"
         )
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
+
 
 # =============================
 # Tạo tín hiệu giao dịch
@@ -172,6 +194,7 @@ def create_trade_signal(symbol: str, side: str, entry_raw: float,
     except Exception:
         return None
 
+
 # =============================
 # Gửi tín hiệu giao dịch
 # =============================
@@ -194,23 +217,28 @@ async def job_trade_signals(_=None):
 
         coin_signals = []
         for coin in all_coins:
-            klines = await get_kline(coin["symbol"], limit=50, interval="Min15")
-            side, weak, reason, diff = decide_direction_with_indicators(klines)
+            klines = await get_kline(coin["symbol"], limit=30, interval="Min15")
+            funding = await get_funding_rate(coin["symbol"])
+            orderbook = await get_orderbook(coin["symbol"])
+            side, weak, reason, diff = decide_direction(klines, funding, orderbook)
 
-            coin_signals.append({
-                "symbol": coin["symbol"],
-                "side": side,
-                "reason": reason,
-                "strength": diff,
-                "lastPrice": coin["lastPrice"],
-                "weak": weak
-            })
+            if not weak:
+                coin_signals.append({
+                    "symbol": coin["symbol"],
+                    "side": side,
+                    "reason": reason,
+                    "strength": diff,
+                    "lastPrice": coin["lastPrice"],
+                })
 
-        # sắp xếp strength giảm dần
+        if not coin_signals:
+            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+                                   text="⚠️ Không có coin nào có tín hiệu rõ ràng.")
+            return
+
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
-        messages = []
         for idx, coin in enumerate(top5):
             msg = create_trade_signal(
                 symbol=coin["symbol"],
@@ -219,21 +247,19 @@ async def job_trade_signals(_=None):
                 mode="Scalping",
                 currency_mode=currency_mode,
                 vnd_rate=vnd_rate,
-                weak=coin["weak"],
+                weak=False,
                 reason=coin["reason"],
                 strength=round(coin["strength"], 2)
             )
-            if idx == 0 and not coin["weak"]:  # coin mạnh nhất
+            if idx == 0:
                 msg = msg.replace("📈", "📈⭐", 1)
-            messages.append(msg)
-
-        for msg in messages:
             if msg:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
 
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
+
 
 # =============================
 # Setup job vào job_queue
