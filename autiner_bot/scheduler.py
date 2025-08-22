@@ -16,7 +16,6 @@ import numpy as np
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
-
 # =============================
 # Format giá
 # =============================
@@ -43,7 +42,6 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
     except Exception:
         return str(value)
 
-
 # =============================
 # EMA
 # =============================
@@ -56,33 +54,69 @@ def ema(values, period):
         ema_val = v * k + ema_val * (1 - k)
     return ema_val
 
+# =============================
+# RSI
+# =============================
+def rsi(values, period=14):
+    if len(values) < period + 1:
+        return 50
+    deltas = np.diff(values)
+    ups = deltas.clip(min=0)
+    downs = -1 * deltas.clip(max=0)
+    avg_gain = np.mean(ups[-period:])
+    avg_loss = np.mean(downs[-period:]) if np.mean(downs[-period:]) != 0 else 1e-10
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
 # =============================
-# Quyết định LONG/SHORT
+# MACD
 # =============================
-def decide_direction_with_ema(klines: list) -> tuple[str, bool, str, float]:
-    if not klines or len(klines) < 12:
-        return ("LONG", True, "No data", 0)
+def macd(values, short=12, long=26, signal=9):
+    if len(values) < long + signal:
+        return 0, 0
+    ema_short = ema(values, short)
+    ema_long = ema(values, long)
+    macd_line = ema_short - ema_long
+    signal_line = ema(values[-signal:], signal)
+    return macd_line, signal_line
+
+# =============================
+# Quyết định xu hướng với EMA + RSI + MACD
+# =============================
+def decide_direction_with_indicators(klines: list):
+    if not klines or len(klines) < 26:
+        return ("LONG", True, "Không đủ dữ liệu", 0)
 
     closes = [k["close"] for k in klines]
 
+    # EMA
     ema6 = ema(closes, 6)
     ema12 = ema(closes, 12)
     last = closes[-1]
+    diff = abs(ema6 - ema12) / last * 100  # strength %
 
-    diff = abs(ema6 - ema12) / last * 100  # %
-    reason = f"EMA6={ema6:.4f}, EMA12={ema12:.4f}, Close={last:.4f}"
+    # RSI
+    rsi_val = rsi(closes, 14)
 
-    if diff < 0.2:  # dưới 0.2% coi là sideway
-        return ("LONG", True, f"Sideway ({reason})", diff)
+    # MACD
+    macd_line, signal_line = macd(closes)
 
+    reason = f"EMA6={ema6:.4f}, EMA12={ema12:.4f}, RSI={rsi_val:.2f}, MACD={macd_line:.4f}, Signal={signal_line:.4f}"
+
+    # Xu hướng
     if ema6 > ema12:
-        return ("LONG", False, reason, diff)
-    elif ema6 < ema12:
-        return ("SHORT", False, reason, diff)
+        side = "LONG"
     else:
-        return ("LONG", True, "No trend", diff)
+        side = "SHORT"
 
+    # Kiểm tra sức mạnh xu hướng
+    strong = False
+    if side == "LONG" and rsi_val > 60 and macd_line > signal_line:
+        strong = True
+    elif side == "SHORT" and rsi_val < 40 and macd_line < signal_line:
+        strong = True
+
+    return (side, not strong, reason, diff)
 
 # =============================
 # Notice trước khi ra tín hiệu
@@ -94,11 +128,10 @@ async def job_trade_signals_notice(_=None):
             return
         await bot.send_message(
             chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch, chuẩn bị sẵn sàng nhé!"
+            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch, bạn hãy kiểm tra dữ liệu trước khi vào lệnh nhé!"
         )
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
-
 
 # =============================
 # Tạo tín hiệu giao dịch
@@ -139,7 +172,6 @@ def create_trade_signal(symbol: str, side: str, entry_raw: float,
     except Exception:
         return None
 
-
 # =============================
 # Gửi tín hiệu giao dịch
 # =============================
@@ -160,27 +192,21 @@ async def job_trade_signals(_=None):
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
-        # lưu lại coin + strength
         coin_signals = []
         for coin in all_coins:
-            klines = await get_kline(coin["symbol"], limit=10, interval="Min15")
-            side, weak, reason, diff = decide_direction_with_ema(klines)
+            klines = await get_kline(coin["symbol"], limit=50, interval="Min15")
+            side, weak, reason, diff = decide_direction_with_indicators(klines)
 
-            if not weak:  # chỉ lấy coin có xu hướng rõ
-                coin_signals.append({
-                    "symbol": coin["symbol"],
-                    "side": side,
-                    "reason": reason,
-                    "strength": diff,
-                    "lastPrice": coin["lastPrice"],
-                })
+            coin_signals.append({
+                "symbol": coin["symbol"],
+                "side": side,
+                "reason": reason,
+                "strength": diff,
+                "lastPrice": coin["lastPrice"],
+                "weak": weak
+            })
 
-        if not coin_signals:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có coin nào có xu hướng rõ ràng.")
-            return
-
-        # sắp xếp theo strength giảm dần
+        # sắp xếp strength giảm dần
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
@@ -193,15 +219,14 @@ async def job_trade_signals(_=None):
                 mode="Scalping",
                 currency_mode=currency_mode,
                 vnd_rate=vnd_rate,
-                weak=False,
+                weak=coin["weak"],
                 reason=coin["reason"],
                 strength=round(coin["strength"], 2)
             )
-            if idx == 0:  # coin mạnh nhất
+            if idx == 0 and not coin["weak"]:  # coin mạnh nhất
                 msg = msg.replace("📈", "📈⭐", 1)
             messages.append(msg)
 
-        # gửi tin nhắn
         for msg in messages:
             if msg:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
@@ -209,7 +234,6 @@ async def job_trade_signals(_=None):
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
-
 
 # =============================
 # Setup job vào job_queue
