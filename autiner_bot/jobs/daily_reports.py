@@ -22,7 +22,6 @@ VIETNAMESE_DAYS = {
     "Sunday": "Chủ Nhật",
 }
 
-
 # =============================
 # Bản tin buổi sáng
 # =============================
@@ -49,7 +48,8 @@ async def job_morning_message(_=None):
             f"🔥 Top 5 đồng coin nổi bật:\n"
         )
 
-        for c in market["top5"]:
+        # 🔧 sửa lại key: market["top"]
+        for c in market["top"][:5]:
             msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
 
         msg += "\n⏳ Trong 15 phút nữa sẽ có tín hiệu. Chuẩn bị sẵn sàng để vào lệnh nhé! 🚀"
@@ -58,7 +58,6 @@ async def job_morning_message(_=None):
     except Exception as e:
         print(f"[ERROR] job_morning_message: {e}")
         print(traceback.format_exc())
-
 
 # =============================
 # Bản tin buổi tối
@@ -86,7 +85,8 @@ async def job_evening_summary(_=None):
             f"🔥 Top 5 đồng coin nổi bật:\n"
         )
 
-        for c in market["top5"]:
+        # 🔧 sửa lại key: market["top"]
+        for c in market["top"][:5]:
             msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
 
         msg += "\n📊 Hiệu suất lệnh sẽ được tổng hợp trong bản nâng cấp sau. 🚀"
