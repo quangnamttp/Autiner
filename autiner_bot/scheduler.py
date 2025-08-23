@@ -146,7 +146,7 @@ def decide_direction(klines: list, funding: float, orderbook: dict):
 
 
 # =============================
-# Notice trước khi ra tín hiệu (chỉ tính top5)
+# Notice trước khi ra tín hiệu
 # =============================
 async def job_trade_signals_notice(_=None):
     try:
@@ -163,19 +163,14 @@ async def job_trade_signals_notice(_=None):
             klines = await get_kline(coin["symbol"], limit=30, interval="Min15")
             funding = await get_funding_rate(coin["symbol"])
             orderbook = await get_orderbook(coin["symbol"])
-            side, weak, reason, diff = decide_direction(klines, funding, orderbook)
-            coin_signals.append({
-                "symbol": coin["symbol"],
-                "weak": weak,
-                "strength": diff
-            })
+            _, weak, _, diff = decide_direction(klines, funding, orderbook)
+            coin_signals.append({"weak": weak, "strength": diff})
 
-        # lấy top5 giống lúc trade
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
         strong_count = sum(1 for c in top5 if not c["weak"])
-        weak_count = sum(1 for c in top5 if c["weak"])
+        weak_count = 5 - strong_count
 
         msg = (
             f"⏳ 1 phút nữa sẽ có tín hiệu giao dịch!\n"
@@ -271,6 +266,12 @@ async def job_trade_signals(_=None):
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
+        # ✅ ép ít nhất 2 coin mạnh
+        strong_count = sum(1 for c in top5 if not c["weak"])
+        if strong_count < 2:
+            for i in range(min(2, len(top5))):
+                top5[i]["weak"] = False  
+
         for idx, coin in enumerate(top5):
             msg = create_trade_signal(
                 symbol=coin["symbol"],
@@ -283,7 +284,7 @@ async def job_trade_signals(_=None):
                 reason=coin["reason"],
                 strength=round(coin["strength"], 2)
             )
-            if idx == 0 and not coin["weak"]:
+            if idx < 2 and not coin["weak"]:
                 msg = msg.replace("📈", "📈⭐", 1)
             if msg:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
