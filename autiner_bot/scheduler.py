@@ -95,7 +95,11 @@ def decide_direction(klines: list, funding: float, orderbook: dict):
 
     last = closes[-1]
     diff = abs(ema6 - ema12) / last * 100
-    reason_parts = [f"EMA6={ema6:.2f}, EMA12={ema12:.2f}", f"RSI={rsi_val:.1f}", f"MACD={macd_val:.4f}, Sig={macd_signal:.4f}"]
+    reason_parts = [
+        f"EMA6={ema6:.2f}, EMA12={ema12:.2f}",
+        f"RSI={rsi_val:.1f}",
+        f"MACD={macd_val:.4f}, Sig={macd_signal:.4f}"
+    ]
 
     # EMA trend
     if ema6 > ema12:
@@ -149,10 +153,27 @@ async def job_trade_signals_notice(_=None):
         state = get_state()
         if not state["is_on"]:
             return
-        await bot.send_message(
-            chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-            text="⏳ 1 phút nữa sẽ có tín hiệu giao dịch, chuẩn bị sẵn sàng nhé!"
+
+        all_coins = await get_top_futures(limit=15)
+        if not all_coins:
+            return
+
+        strong_count, weak_count = 0, 0
+        for coin in all_coins:
+            klines = await get_kline(coin["symbol"], limit=30, interval="Min15")
+            funding = await get_funding_rate(coin["symbol"])
+            orderbook = await get_orderbook(coin["symbol"])
+            _, weak, _, _ = decide_direction(klines, funding, orderbook)
+            if weak:
+                weak_count += 1
+            else:
+                strong_count += 1
+
+        msg = (
+            f"⏳ 1 phút nữa sẽ có tín hiệu giao dịch!\n"
+            f"📊 Dự kiến: {strong_count} tín hiệu mạnh, {weak_count} tín hiệu tham khảo."
         )
+        await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
 
