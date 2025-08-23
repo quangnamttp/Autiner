@@ -32,7 +32,7 @@ async def job_morning_message(_=None):
             return
 
         vnd_rate = await get_usdt_vnd_rate()
-        market = await analyze_market_trend(limit=20)   # ✅ lấy top 20 coin
+        market = await analyze_market_trend()   # ✅ bỏ limit
 
         dt = get_vietnam_time()
         weekday_en = dt.strftime("%A")
@@ -48,7 +48,6 @@ async def job_morning_message(_=None):
             f"🔥 Top 5 đồng coin nổi bật:\n"
         )
 
-        # 🔧 sửa lại key: market["top"]
         for c in market["top"][:5]:
             msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
 
@@ -69,7 +68,7 @@ async def job_evening_summary(_=None):
             return
 
         vnd_rate = await get_usdt_vnd_rate()
-        market = await analyze_market_trend(limit=20)
+        market = await analyze_market_trend()   # ✅ bỏ limit
 
         dt = get_vietnam_time()
         weekday_en = dt.strftime("%A")
@@ -85,7 +84,6 @@ async def job_evening_summary(_=None):
             f"🔥 Top 5 đồng coin nổi bật:\n"
         )
 
-        # 🔧 sửa lại key: market["top"]
         for c in market["top"][:5]:
             msg += f" • {c['symbol'].replace('_USDT','/USDT')} | {c['change_pct']:+.2f}%\n"
 
