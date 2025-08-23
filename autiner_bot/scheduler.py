@@ -146,7 +146,7 @@ def decide_direction(klines: list, funding: float, orderbook: dict):
 
 
 # =============================
-# Notice trước khi ra tín hiệu
+# Notice trước khi ra tín hiệu (chỉ tính top5)
 # =============================
 async def job_trade_signals_notice(_=None):
     try:
@@ -158,16 +158,24 @@ async def job_trade_signals_notice(_=None):
         if not all_coins:
             return
 
-        strong_count, weak_count = 0, 0
+        coin_signals = []
         for coin in all_coins:
             klines = await get_kline(coin["symbol"], limit=30, interval="Min15")
             funding = await get_funding_rate(coin["symbol"])
             orderbook = await get_orderbook(coin["symbol"])
-            _, weak, _, _ = decide_direction(klines, funding, orderbook)
-            if weak:
-                weak_count += 1
-            else:
-                strong_count += 1
+            side, weak, reason, diff = decide_direction(klines, funding, orderbook)
+            coin_signals.append({
+                "symbol": coin["symbol"],
+                "weak": weak,
+                "strength": diff
+            })
+
+        # lấy top5 giống lúc trade
+        coin_signals.sort(key=lambda x: x["strength"], reverse=True)
+        top5 = coin_signals[:5]
+
+        strong_count = sum(1 for c in top5 if not c["weak"])
+        weak_count = sum(1 for c in top5 if c["weak"])
 
         msg = (
             f"⏳ 1 phút nữa sẽ có tín hiệu giao dịch!\n"
