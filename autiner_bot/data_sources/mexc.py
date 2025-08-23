@@ -74,7 +74,7 @@ async def get_usdt_vnd_rate() -> float:
 # =============================
 async def get_market_sentiment():
     try:
-        coins = await get_top_futures(limit=30)
+        coins = await get_top_futures(limit=15)   # ✅ cố định top 15
         if not coins:
             return {"long": 50, "short": 50}
         ups = sum(1 for c in coins if c["change_pct"] >= 0)
@@ -91,9 +91,12 @@ async def get_market_sentiment():
 # =============================
 # Phân tích xu hướng thị trường (cho Daily)
 # =============================
-async def analyze_market_trend(limit: int = 20):
+async def analyze_market_trend():
+    """
+    Phân tích dựa trên TOP 15 coin volume cao nhất.
+    """
     try:
-        coins = await get_top_futures(limit=limit)
+        coins = await get_top_futures(limit=15)   # ✅ cố định top 15
         if not coins:
             return {
                 "long": 50.0,
@@ -105,13 +108,11 @@ async def analyze_market_trend(limit: int = 20):
         ups = [c for c in coins if c["change_pct"] > 0]
         downs = [c for c in coins if c["change_pct"] < 0]
 
-        total = len(ups) + len(downs)
-        if total == 0:
-            long_pct, short_pct = 50.0, 50.0
-        else:
-            long_pct = round(len(ups) / total * 100, 1)
-            short_pct = round(len(downs) / total * 100, 1)
+        total = len(coins)
+        long_pct = round(len(ups) / total * 100, 1)
+        short_pct = round(len(downs) / total * 100, 1)
 
+        # Xác định xu hướng
         if long_pct > short_pct + 5:
             trend = "📈 Xu hướng TĂNG (phe LONG chiếm ưu thế)"
         elif short_pct > long_pct + 5:
@@ -119,6 +120,7 @@ async def analyze_market_trend(limit: int = 20):
         else:
             trend = "⚖️ Thị trường sideway"
 
+        # Top 5 coin biến động mạnh nhất trong 15 coin
         top = sorted(coins, key=lambda x: abs(x.get("change_pct", 0)), reverse=True)[:5]
 
         return {
