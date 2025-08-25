@@ -15,7 +15,6 @@ from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
-
 # =============================
 # Format giá (không làm tròn, không có 0. hoặc ,0)
 # =============================
@@ -25,8 +24,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             if not vnd_rate or vnd_rate <= 0:
                 return "N/A VND"
             value = value * vnd_rate
-            # số nguyên, không có thập phân dư
-            return f"{value:,.0f}".replace(",", ".")
+            return f"{value:,.0f}".replace(",", ".")   # luôn số nguyên, không dư .0
         else:
             s = f"{value:.6f}".rstrip("0").rstrip(".")
             if float(s) >= 1:
@@ -40,7 +38,6 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
     except Exception:
         return str(value)
 
-
 # =============================
 # Notice trước khi ra tín hiệu
 # =============================
@@ -50,7 +47,7 @@ async def job_trade_signals_notice(_=None):
         if not state["is_on"]:
             return
 
-        all_coins = await get_top_futures(limit=15)
+        all_coins = await get_top_futures(limit=20)
         if not all_coins:
             return
 
@@ -72,7 +69,6 @@ async def job_trade_signals_notice(_=None):
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
-
 
 # =============================
 # Tạo tín hiệu giao dịch
@@ -111,7 +107,6 @@ def create_trade_signal(symbol, side, entry_raw,
     except Exception:
         return None
 
-
 # =============================
 # Gửi tín hiệu giao dịch (3 Scalping + 2 Swing)
 # =============================
@@ -127,7 +122,7 @@ async def job_trade_signals(_=None):
         all_coins = await get_top_futures(limit=20)
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không lấy được dữ liệu coin từ sàn.")
+                                   text="⚠️ Không lấy được dữ liệu coin từ MEXC.")
             return
 
         coin_signals = []
@@ -154,8 +149,7 @@ async def job_trade_signals(_=None):
                 strength=coin["strength"],
                 reason=coin["reason"]
             )
-            # đánh dấu tín hiệu mạnh nhất
-            if idx == 0:
+            if idx == 0:  # đánh dấu coin mạnh nhất
                 msg = msg.replace("📈", "📈⭐", 1)
             if msg:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
@@ -164,19 +158,20 @@ async def job_trade_signals(_=None):
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
 
-
 # =============================
 # Setup job vào job_queue
 # =============================
 def setup_jobs(application):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
 
+    # daily đã có sẵn file riêng → chỉ gọi lại
     application.job_queue.run_daily(job_morning_message, time=time(6, 0, 0, tzinfo=tz))
     application.job_queue.run_daily(job_evening_summary, time=time(22, 0, 0, tzinfo=tz))
 
+    # 30p một lần
     for h in range(6, 22):
         for m in [15, 45]:
             application.job_queue.run_daily(job_trade_signals_notice, time=time(h, m - 1, 0, tzinfo=tz))
             application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
 
-    print("✅ Scheduler đã setup thành công!")
+    print("✅ Scheduler MEXC đã setup thành công!")
