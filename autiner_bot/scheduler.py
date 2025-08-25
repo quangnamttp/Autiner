@@ -111,21 +111,19 @@ def decide_direction(klines: list, funding: float, orderbook: dict):
 
     weak = False
 
-    # RSI filter
-    if trend == "LONG" and rsi_val > 70:
-        reason_parts.append("RSI quá mua")
+    # RSI filter (nới lỏng: chỉ coi là yếu nếu RSI > 80 hoặc < 20)
+    if trend == "LONG" and rsi_val > 80:
+        reason_parts.append("RSI cực quá mua")
         weak = True
-    if trend == "SHORT" and rsi_val < 30:
-        reason_parts.append("RSI quá bán")
+    if trend == "SHORT" and rsi_val < 20:
+        reason_parts.append("RSI cực quá bán")
         weak = True
 
-    # MACD confirm
+    # MACD confirm (nới lỏng: chỉ ghi chú, không đánh dấu yếu)
     if trend == "LONG" and macd_val < macd_signal:
-        reason_parts.append("MACD chưa xác nhận")
-        weak = True
+        reason_parts.append("MACD chậm xác nhận")
     if trend == "SHORT" and macd_val > macd_signal:
-        reason_parts.append("MACD chưa xác nhận")
-        weak = True
+        reason_parts.append("MACD chậm xác nhận")
 
     # Funding bias
     if funding > 0.1:
@@ -154,7 +152,6 @@ async def job_trade_signals_notice(_=None):
         if not state["is_on"]:
             return
 
-        # chỉ check 5 coin mạnh nhất
         all_coins = await get_top_futures(limit=15)
         if not all_coins:
             return
@@ -167,11 +164,11 @@ async def job_trade_signals_notice(_=None):
             side, weak, _, diff = decide_direction(klines, funding, orderbook)
             coin_signals.append((side, weak, diff))
 
-        # chọn top 5 theo strength
         coin_signals.sort(key=lambda x: x[2], reverse=True)
         top5 = coin_signals[:5]
 
-        strong_count = sum(1 for s in top5 if s[2] >= 0.2 and not s[1])
+        # nới lỏng: chỉ cần strength >= 0.05
+        strong_count = sum(1 for s in top5 if s[2] >= 0.05 and not s[1])
         weak_count = len(top5) - strong_count
 
         msg = (
@@ -233,9 +230,7 @@ async def job_trade_signals(_=None):
             return
 
         currency_mode = state.get("currency_mode", "USD")
-        vnd_rate = None
-        if currency_mode == "VND":
-            vnd_rate = await get_usdt_vnd_rate()
+        vnd_rate = await get_usdt_vnd_rate() if currency_mode == "VND" else None
 
         all_coins = await get_top_futures(limit=15)
         if not all_coins:
@@ -264,12 +259,11 @@ async def job_trade_signals(_=None):
                                    text="⚠️ Không có coin nào có tín hiệu.")
             return
 
-        # sắp xếp theo strength
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
         for idx, coin in enumerate(top5):
-            strong = coin["strength"] >= 0.2 and not coin["weak"]
+            strong = coin["strength"] >= 0.05 and not coin["weak"]
 
             msg = create_trade_signal(
                 symbol=coin["symbol"],
