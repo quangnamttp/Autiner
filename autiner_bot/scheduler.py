@@ -18,7 +18,6 @@ import numpy as np
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
-
 # =============================
 # Format giá
 # =============================
@@ -28,10 +27,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             if not vnd_rate or vnd_rate <= 0:
                 return "N/A VND"
             value = value * vnd_rate
-            if value >= 1_000_000:
-                return f"{round(value):,}".replace(",", ".")
-            else:
-                return f"{value:,.2f}".replace(",", ".")
+            return f"{round(value):,}".replace(",", ".")
         else:
             s = f"{value:.6f}".rstrip("0").rstrip(".")
             if float(s) >= 1:
@@ -58,7 +54,6 @@ def ema(values, period):
         ema_val = v * k + ema_val * (1 - k)
     return ema_val
 
-
 def rsi(values, period=14):
     if len(values) < period + 1:
         return 50
@@ -67,7 +62,6 @@ def rsi(values, period=14):
     downs = -deltas[deltas < 0].sum() / period
     rs = ups / downs if downs != 0 else 0
     return 100 - (100 / (1 + rs))
-
 
 def macd(values, fast=12, slow=26, signal=9):
     if len(values) < slow:
@@ -80,10 +74,10 @@ def macd(values, fast=12, slow=26, signal=9):
 
 
 # =============================
-# Quyết định xu hướng
+# Quyết định xu hướng (nới lỏng bộ lọc)
 # =============================
 def decide_direction(klines: list, funding: float, orderbook: dict):
-    if not klines or len(klines) < 30:
+    if not klines or len(klines) < 20:   # nới lỏng: cần ít dữ liệu hơn
         return ("LONG", True, "Không đủ dữ liệu", 0)
 
     closes = [k["close"] for k in klines]
@@ -111,36 +105,83 @@ def decide_direction(klines: list, funding: float, orderbook: dict):
 
     weak = False
 
-    # RSI filter (nới lỏng: chỉ coi là yếu nếu RSI > 80 hoặc < 20)
-    if trend == "LONG" and rsi_val > 80:
-        reason_parts.append("RSI cực quá mua")
+    # RSI filter (nới lỏng: vùng quá mua/bán cao hơn)
+    if trend == "LONG" and rsi_val > 75:
+        reason_parts.append("RSI quá mua")
         weak = True
-    if trend == "SHORT" and rsi_val < 20:
-        reason_parts.append("RSI cực quá bán")
+    if trend == "SHORT" and rsi_val < 25:
+        reason_parts.append("RSI quá bán")
         weak = True
 
-    # MACD confirm (nới lỏng: chỉ ghi chú, không đánh dấu yếu)
+    # MACD confirm
     if trend == "LONG" and macd_val < macd_signal:
-        reason_parts.append("MACD chậm xác nhận")
+        reason_parts.append("MACD chưa xác nhận")
     if trend == "SHORT" and macd_val > macd_signal:
-        reason_parts.append("MACD chậm xác nhận")
+        reason_parts.append("MACD chưa xác nhận")
 
-    # Funding bias
-    if funding > 0.1:
+    # Funding bias (nới lỏng ngưỡng)
+    if funding > 0.05:
         reason_parts.append("Funding + (crowded LONG)")
-    elif funding < -0.1:
+    elif funding < -0.05:
         reason_parts.append("Funding - (crowded SHORT)")
 
     # Orderbook check
     if orderbook:
         bids = orderbook.get("bids", 1)
         asks = orderbook.get("asks", 1)
-        if bids / asks > 1.1:
+        if bids / asks > 1.05:
             reason_parts.append("Áp lực mua")
-        elif asks / bids > 1.1:
+        elif asks / bids > 1.05:
             reason_parts.append("Áp lực bán")
 
     return (trend, weak, ", ".join(reason_parts), diff)
+
+
+# =============================
+# Tạo tín hiệu giao dịch (hiển thị strength chuẩn)
+# =============================
+def create_trade_signal(symbol, side, entry_raw,
+                        mode="Scalping", currency_mode="USD",
+                        vnd_rate=None, reason="No data", strength=0):
+    try:
+        entry_price = format_price(entry_raw, currency_mode, vnd_rate)
+
+        if side == "LONG":
+            tp_val = entry_raw * (1.01 if mode == "Scalping" else 1.02)
+            sl_val = entry_raw * (0.99 if mode == "Scalping" else 0.98)
+        elif side == "SHORT":
+            tp_val = entry_raw * (0.99 if mode == "Scalping" else 0.98)
+            sl_val = entry_raw * (1.01 if mode == "Scalping" else 1.02)
+        else:
+            tp_val = sl_val = entry_raw
+
+        tp = format_price(tp_val, currency_mode, vnd_rate)
+        sl = format_price(sl_val, currency_mode, vnd_rate)
+
+        symbol_display = symbol.replace("_USDT", f"/{currency_mode.upper()}")
+
+        # strength label
+        if strength >= 70:
+            strength_txt = f"{strength:.0f}% (⭐ Mạnh)"
+        elif strength >= 50:
+            strength_txt = f"{strength:.0f}% (Tiêu chuẩn)"
+        else:
+            strength_txt = f"{strength:.0f}% (Tham khảo)"
+
+        msg = (
+            f"📈 {symbol_display} — {'🟢 LONG' if side=='LONG' else '🟥 SHORT'}\n\n"
+            f"🟢 Loại lệnh: {mode}\n"
+            f"🔹 Kiểu vào lệnh: Market\n"
+            f"💰 Entry: {entry_price} {currency_mode}\n"
+            f"🎯 TP: {tp} {currency_mode}\n"
+            f"🛡️ SL: {sl} {currency_mode}\n"
+            f"📊 Độ mạnh: {strength_txt}\n"
+            f"📌 Lý do: {reason}\n"
+            f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
+        )
+        return msg
+    except Exception:
+        return None
 
 
 # =============================
@@ -167,8 +208,7 @@ async def job_trade_signals_notice(_=None):
         coin_signals.sort(key=lambda x: x[2], reverse=True)
         top5 = coin_signals[:5]
 
-        # nới lỏng: chỉ cần strength >= 0.05
-        strong_count = sum(1 for s in top5 if s[2] >= 0.05 and not s[1])
+        strong_count = sum(1 for s in top5 if s[2] >= 0.1 and not s[1])  # nới lỏng từ 0.2 → 0.1
         weak_count = len(top5) - strong_count
 
         msg = (
@@ -178,46 +218,6 @@ async def job_trade_signals_notice(_=None):
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
-
-
-# =============================
-# Tạo tín hiệu giao dịch
-# =============================
-def create_trade_signal(symbol, side, entry_raw,
-                        mode="Scalping", currency_mode="USD",
-                        vnd_rate=None, weak=False, reason="No data", strength=0):
-    try:
-        entry_price = format_price(entry_raw, currency_mode, vnd_rate)
-
-        if side == "LONG":
-            tp_val = entry_raw * (1.01 if mode == "Scalping" else 1.02)
-            sl_val = entry_raw * (0.99 if mode == "Scalping" else 0.98)
-        elif side == "SHORT":
-            tp_val = entry_raw * (0.99 if mode == "Scalping" else 0.98)
-            sl_val = entry_raw * (1.01 if mode == "Scalping" else 1.02)
-        else:
-            tp_val = sl_val = entry_raw
-
-        tp = format_price(tp_val, currency_mode, vnd_rate)
-        sl = format_price(sl_val, currency_mode, vnd_rate)
-
-        symbol_display = symbol.replace("_USDT", f"/{currency_mode.upper()}")
-        strength_txt = "Tham khảo" if weak else f"{strength:.2f}%"
-
-        msg = (
-            f"📈 {symbol_display} — {'🟢 LONG' if side=='LONG' else '🟥 SHORT'}\n\n"
-            f"🟢 Loại lệnh: {mode}\n"
-            f"🔹 Kiểu vào lệnh: Market\n"
-            f"💰 Entry: {entry_price} {currency_mode}\n"
-            f"🎯 TP: {tp} {currency_mode}\n"
-            f"🛡️ SL: {sl} {currency_mode}\n"
-            f"📊 Độ mạnh: {strength_txt}\n"
-            f"📌 Lý do: {reason}\n"
-            f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
-        )
-        return msg
-    except Exception:
-        return None
 
 
 # =============================
@@ -245,26 +245,22 @@ async def job_trade_signals(_=None):
             orderbook = await get_orderbook(coin["symbol"])
             side, weak, reason, diff = decide_direction(klines, funding, orderbook)
 
+            # strength = diff * 100 để dễ đạt ngưỡng
+            strength_val = round(diff * 100, 2)
+
             coin_signals.append({
                 "symbol": coin["symbol"],
                 "side": side,
                 "reason": reason,
-                "strength": diff,
+                "strength": strength_val,
                 "lastPrice": coin["lastPrice"],
                 "weak": weak
             })
-
-        if not coin_signals:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có coin nào có tín hiệu.")
-            return
 
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
         for idx, coin in enumerate(top5):
-            strong = coin["strength"] >= 0.05 and not coin["weak"]
-
             msg = create_trade_signal(
                 symbol=coin["symbol"],
                 side=coin["side"],
@@ -272,11 +268,10 @@ async def job_trade_signals(_=None):
                 mode="Scalping",
                 currency_mode=currency_mode,
                 vnd_rate=vnd_rate,
-                weak=not strong,
                 reason=coin["reason"],
-                strength=round(coin["strength"], 2)
+                strength=coin["strength"]
             )
-            if strong and idx == 0:
+            if coin["strength"] >= 70 and idx == 0:
                 msg = msg.replace("📈", "📈⭐", 1)
             if msg:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
