@@ -63,7 +63,8 @@ async def get_usdt_vnd_rate() -> float:
                     return 0
                 prices = [float(ad["adv"]["price"]) for ad in advs[:5] if "adv" in ad]
                 return sum(prices) / len(prices) if prices else 0
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] get_usdt_vnd_rate: {e}")
         return 0
 
 
@@ -105,7 +106,8 @@ async def get_kline(symbol: str, interval: str = "Min5", limit: int = 200):
                      "low": float(k[3]), "close": float(k[4]), "volume": float(k[5])}
                     for k in data["data"]
                 ]
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] get_kline({symbol}): {e}")
         return []
 
 
@@ -123,7 +125,8 @@ async def get_funding_rate(symbol: str) -> float:
                 if not data or "data" not in data:
                     return 0
                 return float(data["data"].get("rate", 0))
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] get_funding_rate({symbol}): {e}")
         return 0
 
 
@@ -143,7 +146,8 @@ async def get_orderbook(symbol: str, depth: int = 20) -> dict:
                 bids = sum(float(b[1]) for b in data["data"].get("bids", []))
                 asks = sum(float(a[1]) for a in data["data"].get("asks", []))
                 return {"bids": bids, "asks": asks}
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] get_orderbook({symbol}): {e}")
         return {}
 
 
@@ -166,9 +170,9 @@ async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
         funding = await get_funding_rate(symbol)
         orderbook = await get_orderbook(symbol)
 
-        # Strength = độ chênh EMA
+        # Strength = độ chênh EMA (%)
         diff = abs(ema9 - ema21) / last * 100
-        strength = round(diff, 1)
+        strength = round(diff * 100, 1)
 
         side = "LONG" if ema9 > ema21 else "SHORT"
 
@@ -198,3 +202,37 @@ async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
     except Exception as e:
         print(f"[ERROR] analyze_coin_trend({symbol}): {e}")
         return None
+
+
+# =============================
+# Phân tích xu hướng thị trường (Daily)
+# =============================
+async def analyze_market_trend():
+    try:
+        coins = await get_top_futures(limit=15)
+        if not coins:
+            return {"long": 50.0, "short": 50.0, "trend": "❓ Không xác định", "top": []}
+
+        long_vol = sum(c["volume"] for c in coins if c["change_pct"] > 0)
+        short_vol = sum(c["volume"] for c in coins if c["change_pct"] < 0)
+        total_vol = long_vol + short_vol
+
+        if total_vol == 0:
+            long_pct, short_pct = 50.0, 50.0
+        else:
+            long_pct = round(long_vol / total_vol * 100, 1)
+            short_pct = round(short_vol / total_vol * 100, 1)
+
+        if long_pct > short_pct + 5:
+            trend = "📈 Xu hướng TĂNG (phe LONG chiếm ưu thế)"
+        elif short_pct > long_pct + 5:
+            trend = "📉 Xu hướng GIẢM (phe SHORT chiếm ưu thế)"
+        else:
+            trend = "⚖️ Thị trường sideway"
+
+        top = sorted(coins, key=lambda x: abs(x.get("change_pct", 0)), reverse=True)[:5]
+
+        return {"long": long_pct, "short": short_pct, "trend": trend, "top": top}
+    except Exception as e:
+        print(f"[ERROR] analyze_market_trend: {e}")
+        return {"long": 50.0, "short": 50.0, "trend": "❓ Không xác định", "top": []}
