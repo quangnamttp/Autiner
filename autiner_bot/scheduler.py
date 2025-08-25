@@ -5,7 +5,7 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
-    analyze_coin_trend,   # ✅ dùng scoring mới
+    analyze_coin_trend
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -17,7 +17,7 @@ bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
 
 # =============================
-# Format giá (USD / VND)
+# Format giá (không làm tròn, không 0. cuối)
 # =============================
 def format_price(value: float, currency: str = "USD", vnd_rate: float | None = None) -> str:
     try:
@@ -25,11 +25,18 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             if not vnd_rate or vnd_rate <= 0:
                 return "N/A VND"
             value = value * vnd_rate
-        # giữ nguyên, bỏ số 0 và dấu . thừa
-        s = f"{value:.10f}".rstrip("0").rstrip(".")
-        parts = s.split(".")
-        parts[0] = f"{int(parts[0]):,}".replace(",", ".")  # chấm ngàn
-        return ".".join(parts)
+            s = f"{value:,.0f}".replace(",", ".")  # không có số 0 dư
+            return s
+        else:
+            s = f"{value:.6f}".rstrip("0").rstrip(".")
+            if float(s) >= 1:
+                if "." in s:
+                    int_part, dec_part = s.split(".")
+                    int_part = f"{int(int_part):,}".replace(",", ".")
+                    s = f"{int_part}.{dec_part}" if dec_part else int_part
+                else:
+                    s = f"{int(s):,}".replace(",", ".")
+            return s
     except Exception:
         return str(value)
 
@@ -43,19 +50,19 @@ async def job_trade_signals_notice(_=None):
         if not state["is_on"]:
             return
 
-        coins = await get_top_futures(limit=15)
-        if not coins:
+        all_coins = await get_top_futures(limit=15)
+        if not all_coins:
             return
 
         coin_signals = []
-        for coin in coins:
+        for coin in all_coins:
             trend = await analyze_coin_trend(coin["symbol"], interval="Min15", limit=50)
             coin_signals.append(trend)
 
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
-        strong_count = sum(1 for s in top5 if s["strength"] >= 60 and not s["is_weak"])
+        strong_count = sum(1 for s in top5 if not s["is_weak"])
         weak_count = len(top5) - strong_count
 
         msg = (
@@ -63,7 +70,6 @@ async def job_trade_signals_notice(_=None):
             f"📊 Dự kiến: {strong_count} tín hiệu mạnh, {weak_count} tín hiệu tham khảo."
         )
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
-
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
 
@@ -80,7 +86,7 @@ def create_trade_signal(symbol, side, entry_raw,
         if side == "LONG":
             tp_val = entry_raw * (1.01 if mode == "Scalping" else 1.02)
             sl_val = entry_raw * (0.99 if mode == "Scalping" else 0.98)
-        else:
+        else:  # SHORT
             tp_val = entry_raw * (0.99 if mode == "Scalping" else 0.98)
             sl_val = entry_raw * (1.01 if mode == "Scalping" else 1.02)
 
@@ -118,14 +124,14 @@ async def job_trade_signals(_=None):
         currency_mode = state.get("currency_mode", "USD")
         vnd_rate = await get_usdt_vnd_rate() if currency_mode == "VND" else None
 
-        coins = await get_top_futures(limit=15)
-        if not coins:
+        all_coins = await get_top_futures(limit=15)
+        if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
             return
 
         coin_signals = []
-        for coin in coins:
+        for coin in all_coins:
             trend = await analyze_coin_trend(coin["symbol"], interval="Min15", limit=50)
             trend["symbol"] = coin["symbol"]
             trend["lastPrice"] = coin["lastPrice"]
@@ -133,14 +139,8 @@ async def job_trade_signals(_=None):
 
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
 
-        strong_signals = [c for c in coin_signals if c["strength"] >= 60 and not c["is_weak"]]
-
-        if not strong_signals:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có tín hiệu mạnh.")
-            return
-
-        top2 = strong_signals[:2]  # ✅ lấy tối đa 2 coin mạnh
+        # ✅ luôn lấy 2 coin mạnh nhất, không lọc %
+        top2 = coin_signals[:2]
 
         for idx, coin in enumerate(top2):
             msg = create_trade_signal(
@@ -154,7 +154,7 @@ async def job_trade_signals(_=None):
                 reason=coin["reason"]
             )
             if idx == 0:
-                msg = msg.replace("📈", "📈⭐", 1)  # đánh dấu coin mạnh nhất
+                msg = msg.replace("📈", "📈⭐", 1)
             if msg:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
 
