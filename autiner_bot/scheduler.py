@@ -17,7 +17,7 @@ bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
 
 # =============================
-# Format giá (không làm tròn, không 0. cuối)
+# Format giá (không làm tròn, không có 0. hoặc ,0)
 # =============================
 def format_price(value: float, currency: str = "USD", vnd_rate: float | None = None) -> str:
     try:
@@ -25,17 +25,17 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             if not vnd_rate or vnd_rate <= 0:
                 return "N/A VND"
             value = value * vnd_rate
-            s = f"{value:,.0f}".replace(",", ".")  # không có số 0 dư
-            return s
+            # số nguyên, không có thập phân dư
+            return f"{value:,.0f}".replace(",", ".")
         else:
             s = f"{value:.6f}".rstrip("0").rstrip(".")
             if float(s) >= 1:
                 if "." in s:
                     int_part, dec_part = s.split(".")
                     int_part = f"{int(int_part):,}".replace(",", ".")
-                    s = f"{int_part}.{dec_part}" if dec_part else int_part
+                    return f"{int_part}.{dec_part}" if dec_part else int_part
                 else:
-                    s = f"{int(s):,}".replace(",", ".")
+                    return f"{int(s):,}".replace(",", ".")
             return s
     except Exception:
         return str(value)
@@ -113,7 +113,7 @@ def create_trade_signal(symbol, side, entry_raw,
 
 
 # =============================
-# Gửi tín hiệu giao dịch
+# Gửi tín hiệu giao dịch (3 Scalping + 2 Swing)
 # =============================
 async def job_trade_signals(_=None):
     try:
@@ -124,7 +124,7 @@ async def job_trade_signals(_=None):
         currency_mode = state.get("currency_mode", "USD")
         vnd_rate = await get_usdt_vnd_rate() if currency_mode == "VND" else None
 
-        all_coins = await get_top_futures(limit=15)
+        all_coins = await get_top_futures(limit=20)
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
@@ -139,20 +139,22 @@ async def job_trade_signals(_=None):
 
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
 
-        # ✅ luôn lấy 2 coin mạnh nhất, không lọc %
-        top2 = coin_signals[:2]
+        # ✅ lấy 5 coin mạnh nhất: 3 Scalping + 2 Swing
+        top5 = coin_signals[:5]
 
-        for idx, coin in enumerate(top2):
+        for idx, coin in enumerate(top5):
+            mode = "Scalping" if idx < 3 else "Swing"
             msg = create_trade_signal(
                 symbol=coin["symbol"],
                 side=coin["side"],
                 entry_raw=coin["lastPrice"],
-                mode="Scalping",
+                mode=mode,
                 currency_mode=currency_mode,
                 vnd_rate=vnd_rate,
                 strength=coin["strength"],
                 reason=coin["reason"]
             )
+            # đánh dấu tín hiệu mạnh nhất
             if idx == 0:
                 msg = msg.replace("📈", "📈⭐", 1)
             if msg:
