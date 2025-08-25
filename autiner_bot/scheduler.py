@@ -5,9 +5,6 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
-    get_kline,
-    get_funding_rate,
-    get_orderbook,
     analyze_coin_trend   # ✅ scoring theo file mexc mới
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
@@ -56,20 +53,30 @@ async def job_trade_signals_notice(_=None):
         coin_signals = []
         for coin in all_coins:
             trend = await analyze_coin_trend(coin["symbol"], interval="Min15", limit=50)
+            trend["symbol"] = coin["symbol"]
             coin_signals.append(trend)
 
-        # lấy top5
+        # lấy top5 coin mạnh nhất
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
-        strong_count = sum(1 for s in top5 if s["strength"] >= 60 and not s["is_weak"])
-        weak_count = len(top5) - strong_count
+        strong = [c for c in top5 if c["strength"] >= 60 and not c["is_weak"]]
+        weak   = [c for c in top5 if not (c["strength"] >= 60 and not c["is_weak"])]
 
         msg = (
             f"⏳ 1 phút nữa sẽ có tín hiệu giao dịch!\n"
-            f"📊 Dự kiến: {strong_count} tín hiệu mạnh, {weak_count} tín hiệu tham khảo."
+            f"📊 Dự kiến: {len(strong)} tín hiệu mạnh, {len(weak)} tín hiệu tham khảo.\n"
         )
+
+        if strong:
+            strong_list = ", ".join([f"{c['symbol'].replace('_USDT','/USDT')} ({c['strength']:.0f}%)" for c in strong])
+            msg += f"\n🔥 Mạnh: {strong_list}"
+        if weak:
+            weak_list = ", ".join([c['symbol'].replace('_USDT','/USDT') for c in weak])
+            msg += f"\nℹ️ Tham khảo: {weak_list}"
+
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
 
