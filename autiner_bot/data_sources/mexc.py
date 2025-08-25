@@ -159,7 +159,7 @@ def calc_macd(values, fast=12, slow=26, signal=9):
 
 
 # =============================
-# PHÂN TÍCH 1 COIN (SCORING)
+# PHÂN TÍCH 1 COIN (SCORING - kiểu Binance)
 # =============================
 async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
     try:
@@ -168,7 +168,8 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
             return {"side": "LONG", "strength": 0, "reason": "No data", "is_weak": True}
 
         closes = [k["close"] for k in klines]
-        last = closes[-1]
+        vols   = [k["volume"] for k in klines]
+        last   = closes[-1]
 
         ema6 = calc_ema(closes, 6)
         ema12 = calc_ema(closes, 12)
@@ -178,6 +179,11 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
         funding = await get_funding_rate(symbol)
         orderbook = await get_orderbook(symbol)
 
+        # volume ratio (nến cuối / trung bình 20 nến trước)
+        avg_vol = np.mean(vols[-21:-1]) if len(vols) > 20 else np.mean(vols)
+        vol_ratio = (vols[-1] / avg_vol) if avg_vol > 0 else 1
+
+        # ---- Scoring ----
         score, reasons = 0, []
         side = "LONG" if ema6 > ema12 else "SHORT"
 
@@ -209,6 +215,10 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
                 score += 1; reasons.append("Orderbook BUY>SELL")
             elif side == "SHORT" and asks > bids:
                 score += 1; reasons.append("Orderbook SELL>BUY")
+
+        # Volume ratio
+        if vol_ratio >= 1.8:  # giống Binance (volume gấp >=1.8 lần bình quân)
+            score += 1; reasons.append(f"Vol5m=x{vol_ratio:.2f}")
 
         # Sideway filter
         if abs(ema6 - ema12) / last * 100 < 0.2:
