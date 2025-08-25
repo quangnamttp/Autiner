@@ -74,7 +74,7 @@ async def get_usdt_vnd_rate() -> float:
 # =============================
 async def get_market_sentiment():
     try:
-        coins = await get_top_futures(limit=15)
+        coins = await get_top_futures(limit=15)   # ✅ cố định top 15
         if not coins:
             return {"long": 50, "short": 50}
 
@@ -98,9 +98,14 @@ async def get_market_sentiment():
 # =============================
 async def analyze_market_trend():
     try:
-        coins = await get_top_futures(limit=15)
+        coins = await get_top_futures(limit=15)   # ✅ cố định top 15
         if not coins:
-            return {"long": 50.0, "short": 50.0, "trend": "❓ Không xác định", "top": []}
+            return {
+                "long": 50.0,
+                "short": 50.0,
+                "trend": "❓ Không xác định",
+                "top": []
+            }
 
         long_vol = sum(c["volume"] for c in coins if c["change_pct"] > 0)
         short_vol = sum(c["volume"] for c in coins if c["change_pct"] < 0)
@@ -121,10 +126,21 @@ async def analyze_market_trend():
 
         top = sorted(coins, key=lambda x: abs(x.get("change_pct", 0)), reverse=True)[:5]
 
-        return {"long": long_pct, "short": short_pct, "trend": trend, "top": top}
+        return {
+            "long": long_pct,
+            "short": short_pct,
+            "trend": trend,
+            "top": top
+        }
     except Exception as e:
         print(f"[ERROR] analyze_market_trend: {e}")
-        return {"long": 50.0, "short": 50.0, "trend": "❓ Không xác định", "top": []}
+        print(traceback.format_exc())
+        return {
+            "long": 50.0,
+            "short": 50.0,
+            "trend": "❓ Không xác định",
+            "top": []
+        }
 
 
 # =============================
@@ -187,7 +203,7 @@ async def get_orderbook(symbol: str, depth: int = 20) -> dict:
 
 
 # =============================
-# EMA / RSI / MACD
+# EMA + RSI
 # =============================
 def calc_ema(values, period):
     if len(values) < period:
@@ -207,24 +223,15 @@ def calc_rsi(closes, period=14):
     rs = ups / downs if downs != 0 else 0
     return 100 - (100 / (1 + rs))
 
-def calc_macd(values, fast=12, slow=26, signal=9):
-    if len(values) < slow:
-        return 0, 0
-    ema_fast = calc_ema(values, fast)
-    ema_slow = calc_ema(values, slow)
-    macd_val = ema_fast - ema_slow
-    macd_signal = calc_ema(values, signal)
-    return macd_val, macd_signal
-
 
 # =============================
-# Phân tích xu hướng 1 coin (Scoring đầy đủ)
+# PHÂN TÍCH 1 COIN (nới lỏng điều kiện)
 # =============================
 async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
     try:
         klines = await get_kline(symbol, interval, limit)
-        if not klines:
-            return {"side": "LONG", "strength": 0, "reason": "Không có dữ liệu nến", "is_weak": True}
+        if not klines or len(klines) < 20:
+            return {"side": "LONG", "strength": 0, "label": "Tham khảo", "reason": "Không đủ dữ liệu", "is_weak": True}
 
         closes = [k["close"] for k in klines]
         last = closes[-1]
@@ -232,39 +239,29 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
         ema6 = calc_ema(closes, 6)
         ema12 = calc_ema(closes, 12)
         rsi_val = calc_rsi(closes, 14)
-        macd_val, macd_sig = calc_macd(closes)
 
         funding = await get_funding_rate(symbol)
         orderbook = await get_orderbook(symbol)
 
-        # --- Scoring ---
-        score, reasons = 0, []
         side = "LONG" if ema6 > ema12 else "SHORT"
+        score, reasons = 0, []
 
         # EMA
-        score += 1
-        reasons.append(f"EMA6={ema6:.2f}, EMA12={ema12:.2f}")
+        score += 1; reasons.append(f"EMA6={ema6:.2f}, EMA12={ema12:.2f}")
 
-        # RSI
-        if side == "LONG" and rsi_val > 55:
-            score += 1; reasons.append(f"RSI={rsi_val:.1f}>55")
-        elif side == "SHORT" and rsi_val < 45:
-            score += 1; reasons.append(f"RSI={rsi_val:.1f}<45")
+        # RSI (nới lỏng)
+        if side == "LONG" and rsi_val > 52:
+            score += 1; reasons.append(f"RSI={rsi_val:.1f}>52")
+        elif side == "SHORT" and rsi_val < 48:
+            score += 1; reasons.append(f"RSI={rsi_val:.1f}<48")
         else:
             reasons.append(f"RSI={rsi_val:.1f}")
 
-        # MACD
-        if side == "LONG" and macd_val > macd_sig:
-            score += 1; reasons.append("MACD xác nhận LONG")
-        elif side == "SHORT" and macd_val < macd_sig:
-            score += 1; reasons.append("MACD xác nhận SHORT")
-        else:
-            reasons.append("MACD chưa xác nhận")
-
         # Funding
-        if (side == "LONG" and funding >= 0) or (side == "SHORT" and funding <= 0):
-            score += 1
-        reasons.append(f"Funding={funding:.4f}")
+        if side == "LONG" and funding >= 0:
+            score += 1; reasons.append(f"Funding={funding:.4f} ≥ 0")
+        elif side == "SHORT" and funding <= 0:
+            score += 1; reasons.append(f"Funding={funding:.4f} ≤ 0")
 
         # Orderbook
         if orderbook:
@@ -273,23 +270,29 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
                 score += 1; reasons.append("Orderbook BUY>SELL")
             elif side == "SHORT" and asks > bids:
                 score += 1; reasons.append("Orderbook SELL>BUY")
-            else:
-                reasons.append("Orderbook cân bằng")
 
-        # Volatility
+        # Sideway filter (nới lỏng từ 0.2 → 0.05)
         diff = abs(ema6 - ema12) / last * 100
-        if diff > 0.2:
-            score += 1; reasons.append(f"Volatility={diff:.2f}%")
+        if diff < 0.05:
+            return {"side": side, "strength": 0, "label": "Tham khảo",
+                    "reason": f"Sideway (EMA6≈EMA12, diff={diff:.3f}%)", "is_weak": True}
 
-        strength = (score / 6) * 100
-        is_weak = strength < 50
+        # Strength
+        strength = (score / 4) * 100
+        if strength >= 70:
+            label = "Mạnh"
+        elif strength >= 40:
+            label = "Tiêu chuẩn"
+        else:
+            label = "Tham khảo"
 
         return {
             "side": side,
             "strength": round(strength, 1),
+            "label": label,
             "reason": ", ".join(reasons),
-            "is_weak": is_weak
+            "is_weak": strength < 40
         }
     except Exception as e:
         print(f"[ERROR] analyze_coin_trend({symbol}): {e}")
-        return {"side": "LONG", "strength": 0, "reason": f"Lỗi phân tích: {e}", "is_weak": True}
+        return {"side": "LONG", "strength": 0, "label": "Tham khảo", "reason": "Error", "is_weak": True}
