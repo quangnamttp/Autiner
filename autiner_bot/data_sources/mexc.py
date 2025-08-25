@@ -159,13 +159,13 @@ def calc_macd(values, fast=12, slow=26, signal=9):
 
 
 # =============================
-# PHÂN TÍCH XU HƯỚNG 1 COIN (SCORING)
+# PHÂN TÍCH XU HƯỚNG 1 COIN (SCORING, KHÔNG FALLBACK)
 # =============================
 async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
     try:
         klines = await get_kline(symbol, interval, limit)
         if not klines or len(klines) < 20:
-            return {"side": "LONG", "strength": 0, "reason": "No data", "is_weak": True}
+            return {"side": None, "strength": 0, "reason": "No data", "is_weak": True}
 
         closes = [k["close"] for k in klines]
         last = closes[-1]
@@ -191,13 +191,13 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
         elif side == "SHORT" and rsi < 45:
             score += 1; reasons.append(f"RSI={rsi:.1f}<45")
 
-        # MACD
+        # MACD confirm
         if side == "LONG" and macd_val > macd_sig:
             score += 1; reasons.append("MACD xác nhận LONG")
         elif side == "SHORT" and macd_val < macd_sig:
             score += 1; reasons.append("MACD xác nhận SHORT")
 
-        # Funding
+        # Funding bias
         if side == "LONG" and funding >= 0:
             score += 1; reasons.append(f"Funding={funding:.4f} ≥ 0")
         elif side == "SHORT" and funding <= 0:
@@ -211,12 +211,15 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
             elif side == "SHORT" and asks > bids:
                 score += 1; reasons.append("Orderbook SELL>BUY")
 
-        # Sideway filter
-        if abs(ema6 - ema12) / last * 100 < 0.2:
-            return {"side": side, "strength": 0, "reason": "Sideway", "is_weak": True}
+        # Volume spike (nến cuối vs trung bình)
+        avg_vol = np.mean([k["volume"] for k in klines[:-1]]) or 1
+        last_vol = klines[-1]["volume"]
+        if last_vol > 1.5 * avg_vol:
+            score += 1; reasons.append(f"Vol spike x{last_vol/avg_vol:.2f}")
 
+        # ---- Strength ----
         strength = (score / 6) * 100
-        is_weak = strength < 60
+        is_weak = strength < 70  # chỉ >=70% mới coi là mạnh
 
         return {
             "side": side,
@@ -226,38 +229,4 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
         }
     except Exception as e:
         print(f"[ERROR] analyze_coin_trend({symbol}): {e}")
-        return {"side": "LONG", "strength": 0, "reason": "Error", "is_weak": True}
-
-
-# =============================
-# PHÂN TÍCH TỔNG QUAN THỊ TRƯỜNG (cho Daily Reports)
-# =============================
-async def analyze_market_trend():
-    try:
-        coins = await get_top_futures(limit=15)
-        if not coins:
-            return {"long": 50.0, "short": 50.0, "trend": "❓ Không xác định", "top": []}
-
-        long_vol = sum(c["volume"] for c in coins if c["change_pct"] > 0)
-        short_vol = sum(c["volume"] for c in coins if c["change_pct"] < 0)
-        total_vol = long_vol + short_vol
-
-        if total_vol == 0:
-            long_pct, short_pct = 50.0, 50.0
-        else:
-            long_pct = round(long_vol / total_vol * 100, 1)
-            short_pct = round(short_vol / total_vol * 100, 1)
-
-        if long_pct > short_pct + 5:
-            trend = "📈 Xu hướng TĂNG (phe LONG chiếm ưu thế)"
-        elif short_pct > long_pct + 5:
-            trend = "📉 Xu hướng GIẢM (phe SHORT chiếm ưu thế)"
-        else:
-            trend = "⚖️ Thị trường sideway"
-
-        top = sorted(coins, key=lambda x: abs(x.get("change_pct", 0)), reverse=True)[:5]
-
-        return {"long": long_pct, "short": short_pct, "trend": trend, "top": top}
-    except Exception as e:
-        print(f"[ERROR] analyze_market_trend: {e}")
-        return {"long": 50.0, "short": 50.0, "trend": "❓ Không xác định", "top": []}
+        return {"side": None, "strength": 0, "reason": "Error", "is_weak": True}
