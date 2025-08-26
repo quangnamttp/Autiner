@@ -100,7 +100,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         s = state.get_state()
         vnd_rate = await get_usdt_vnd_rate() if s["currency_mode"] == "VND" else None
-        trend = await analyze_coin_trend(symbol)
+        trend = await analyze_single_coin(symbol)
 
         if not trend:
             await update.message.reply_text(f"⚠️ Không phân tích được cho {symbol}", reply_markup=get_reply_menu())
