@@ -139,8 +139,42 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=100):
             "ema6": ema6,
             "ema12": ema12,
             "ema20": ema20,
-            "is_weak": False  # không còn 'tham khảo'
+            "is_weak": False
         }
     except Exception as e:
         print(f"[ERROR] analyze_coin_trend({symbol}): {e}")
         return None
+
+
+# =============================
+# Phân tích xu hướng thị trường (Daily)
+# =============================
+async def analyze_market_trend():
+    try:
+        coins = await get_top_futures(limit=15)
+        if not coins:
+            return {"long": 50.0, "short": 50.0, "trend": "❓ Không xác định", "top": []}
+
+        long_vol = sum(c["volume"] for c in coins if c["change_pct"] > 0)
+        short_vol = sum(c["volume"] for c in coins if c["change_pct"] < 0)
+        total_vol = long_vol + short_vol
+
+        if total_vol == 0:
+            long_pct, short_pct = 50.0, 50.0
+        else:
+            long_pct = round(long_vol / total_vol * 100, 1)
+            short_pct = round(short_vol / total_vol * 100, 1)
+
+        if long_pct > short_pct + 5:
+            trend = "📈 Xu hướng TĂNG (phe LONG chiếm ưu thế)"
+        elif short_pct > long_pct + 5:
+            trend = "📉 Xu hướng GIẢM (phe SHORT chiếm ưu thế)"
+        else:
+            trend = "⚖️ Thị trường sideway"
+
+        top = sorted(coins, key=lambda x: abs(x.get("change_pct", 0)), reverse=True)[:5]
+
+        return {"long": long_pct, "short": short_pct, "trend": trend, "top": top}
+    except Exception as e:
+        print(f"[ERROR] analyze_market_trend: {e}")
+        return {"long": 50.0, "short": 50.0, "trend": "❓ Không xác định", "top": []}
