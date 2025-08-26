@@ -132,13 +132,14 @@ async def job_trade_signals(_=None):
                                    text="⚠️ Không lấy được tín hiệu từ dữ liệu phân tích.")
             return
 
-        # Luôn lấy top 5, kể cả yếu
+        # Luôn lấy top 5
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
+        # Nếu tất cả yếu → cảnh báo
         if all(c["is_weak"] for c in top5):
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có tín hiệu mạnh, hiển thị 5 tín hiệu tham khảo.")
+                                   text="⚠️ Tất cả tín hiệu yếu → chỉ nên tham khảo.")
 
         for idx, coin in enumerate(top5):
             mode = "Scalping" if idx < 3 else "Swing"
@@ -176,10 +177,9 @@ def setup_jobs(application):
     # 30 phút/lần
     for h in range(6, 22):
         for m in [0, 30]:
-            if m == 0:
-                application.job_queue.run_daily(job_trade_signals_notice, time=time(h, 59, 0, tzinfo=tz))
-            else:
-                application.job_queue.run_daily(job_trade_signals_notice, time=time(h, 29, 0, tzinfo=tz))
+            notice_minute = m - 1 if m > 0 else 59
+            notice_hour = h if m > 0 else (h - 1 if h > 6 else 6)
+            application.job_queue.run_daily(job_trade_signals_notice, time=time(notice_hour, notice_minute, 0, tzinfo=tz))
             application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
 
     print("✅ Scheduler đã setup thành công!")
