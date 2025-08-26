@@ -69,7 +69,7 @@ async def get_usdt_vnd_rate() -> float:
 
 
 # =============================
-# EMA / RSI
+# EMA
 # =============================
 def calc_ema(values, period):
     if len(values) < period:
@@ -79,15 +79,6 @@ def calc_ema(values, period):
     for v in values[1:]:
         ema_val = v * k + ema_val * (1 - k)
     return ema_val
-
-def calc_rsi(closes, period=14):
-    if len(closes) < period + 1:
-        return 50
-    deltas = np.diff(closes)
-    ups = deltas[deltas > 0].sum() / period
-    downs = -deltas[deltas < 0].sum() / period
-    rs = ups / downs if downs != 0 else 0
-    return 100 - (100 / (1 + rs))
 
 
 # =============================
@@ -125,7 +116,8 @@ async def get_funding_rate(symbol: str) -> float:
                 if not data or "data" not in data:
                     return 0
                 return float(data["data"].get("rate", 0))
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] get_funding_rate({symbol}): {e}")
         return 0
 
 
@@ -151,15 +143,15 @@ async def get_orderbook(symbol: str, depth: int = 20) -> dict:
 
 
 # =============================
-# Phân tích xu hướng 1 coin
+# Phân tích xu hướng 1 coin (EMA6 / EMA12 / EMA20)
 # =============================
-async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
+async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
     try:
         klines = await get_kline(symbol, interval, limit)
-        if not klines or len(klines) < 30:
+        if not klines or len(klines) < 20:
             return {
                 "side": "LONG",
-                "strength": 10,
+                "strength": 0,
                 "reason": "Không đủ dữ liệu",
                 "is_weak": True
             }
@@ -167,69 +159,47 @@ async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
         closes = [k["close"] for k in klines]
         last = closes[-1]
 
-        ema9 = calc_ema(closes, 9)
-        ema21 = calc_ema(closes, 21)
-        rsi = calc_rsi(closes, 14)
-        funding = await get_funding_rate(symbol)
-        orderbook = await get_orderbook(symbol)
+        ema6 = calc_ema(closes, 6)
+        ema12 = calc_ema(closes, 12)
+        ema20 = calc_ema(closes, 20)
 
-        side = "LONG" if ema9 > ema21 else "SHORT"
+        # strength = độ chênh EMA6 - EMA12 (% giá)
+        diff = abs(ema6 - ema12) / last * 100
+        strength = round(diff * 100, 1)
 
-        diff = abs(ema9 - ema21) / last * 100
-        strength = diff * 50  # scale lại strength cho dễ vượt ngưỡng
+        # xu hướng cơ bản
+        side = "LONG" if ema6 > ema12 else "SHORT"
 
-        reasons = [
-            f"EMA9={ema9:.3f}, EMA21={ema21:.3f}",
-            f"RSI={rsi:.1f}",
-            f"Funding={funding:.4f}"
-        ]
-
-        if side == "LONG" and rsi > 55:
-            reasons.append("RSI>55 (ủng hộ LONG)")
-            strength += 15
-        elif side == "SHORT" and rsi < 45:
-            reasons.append("RSI<45 (ủng hộ SHORT)")
-            strength += 15
-
-        if side == "LONG" and funding >= 0:
-            reasons.append("Funding ≥ 0 (ủng hộ LONG)")
-            strength += 5
-        elif side == "SHORT" and funding <= 0:
-            reasons.append("Funding ≤ 0 (ủng hộ SHORT)")
-            strength += 5
-
-        if orderbook:
-            bids, asks = orderbook.get("bids", 0), orderbook.get("asks", 0)
-            if side == "LONG" and bids > asks:
-                reasons.append("Orderbook BUY>SELL")
-                strength += 5
-            elif side == "SHORT" and asks > bids:
-                reasons.append("Orderbook SELL>BUY")
-                strength += 5
+        # check EMA20 để xác nhận
+        if side == "LONG" and ema12 < ema20:
+            reason = f"EMA6={ema6:.3f}>EMA12={ema12:.3f} nhưng EMA20={ema20:.3f} cao hơn → yếu"
+            is_weak = True
+        elif side == "SHORT" and ema12 > ema20:
+            reason = f"EMA6={ema6:.3f}<EMA12={ema12:.3f} nhưng EMA20={ema20:.3f} thấp hơn → yếu"
+            is_weak = True
+        else:
+            reason = f"EMA6={ema6:.3f}, EMA12={ema12:.3f}, EMA20={ema20:.3f}, Close={last:.3f}"
+            is_weak = strength < 30
 
         return {
             "side": side,
-            "strength": round(strength, 1),
-            "reason": ", ".join(reasons),
-            "ema9": ema9,
-            "ema21": ema21,
-            "rsi": rsi,
-            "funding": funding,
-            "orderbook": orderbook,
-            "is_weak": strength < 30   # nới lỏng điều kiện
+            "strength": strength,
+            "reason": reason,
+            "is_weak": is_weak
         }
+
     except Exception as e:
         print(f"[ERROR] analyze_coin_trend({symbol}): {e}")
         return {
             "side": "LONG",
-            "strength": 10,
+            "strength": 0,
             "reason": "Error",
             "is_weak": True
         }
 
 
 # =============================
-# Phân tích xu hướng thị trường
+# Phân tích xu hướng thị trường (Daily)
 # =============================
 async def analyze_market_trend():
     try:
