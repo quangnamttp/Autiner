@@ -25,7 +25,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             if not vnd_rate or vnd_rate <= 0:
                 return "N/A VND"
             value = value * vnd_rate
-            return f"{value:,.0f}".replace(",", ".")  # không thập phân, không số 0 dư
+            return f"{value:,.0f}".replace(",", ".")
         else:
             s = f"{value:.6f}".rstrip("0").rstrip(".")
             if float(s) >= 1:
@@ -59,7 +59,7 @@ async def job_trade_signals_notice(_=None):
 # =============================
 def create_trade_signal(symbol, side, entry_raw,
                         mode="Scalping", currency_mode="USD",
-                        vnd_rate=None, strength=0, reason="No data", is_weak=False):
+                        vnd_rate=None, strength=0, reason="No data"):
     try:
         entry_price = format_price(entry_raw, currency_mode, vnd_rate)
 
@@ -75,10 +75,7 @@ def create_trade_signal(symbol, side, entry_raw,
 
         symbol_display = symbol.replace("_USDT", f"/{currency_mode.upper()}")
 
-        # Độ mạnh hiển thị rõ
-        if is_weak:
-            strength_txt = "Tham khảo"
-        elif strength >= 70:
+        if strength >= 70:
             strength_txt = f"{strength:.0f}% (Mạnh)"
         elif strength >= 50:
             strength_txt = f"{strength:.0f}% (Tiêu chuẩn)"
@@ -132,14 +129,8 @@ async def job_trade_signals(_=None):
                                    text="⚠️ Không lấy được tín hiệu từ dữ liệu phân tích.")
             return
 
-        # Lấy top 5
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
-
-        # Nếu tất cả yếu → cảnh báo
-        if all(c["is_weak"] for c in top5):
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Tất cả tín hiệu yếu → chỉ nên tham khảo.")
 
         for idx, coin in enumerate(top5):
             mode = "Scalping" if idx < 3 else "Swing"
@@ -152,7 +143,6 @@ async def job_trade_signals(_=None):
                 vnd_rate=vnd_rate,
                 strength=coin["strength"],
                 reason=coin["reason"],
-                is_weak=coin["is_weak"]
             )
             if idx == 0:
                 msg = msg.replace("📈", "📈⭐", 1)
@@ -179,9 +169,7 @@ def setup_jobs(application):
         for m in [0, 30]:
             notice_minute = m - 1 if m > 0 else 59
             notice_hour = h if m > 0 else (h - 1 if h > 6 else 6)
-            application.job_queue.run_daily(job_trade_signals_notice,
-                                            time=time(notice_hour, notice_minute, 0, tzinfo=tz))
-            application.job_queue.run_daily(job_trade_signals,
-                                            time=time(h, m, 0, tzinfo=tz))
+            application.job_queue.run_daily(job_trade_signals_notice, time=time(notice_hour, notice_minute, 0, tzinfo=tz))
+            application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
 
     print("✅ Scheduler đã setup thành công!")
