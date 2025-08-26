@@ -122,19 +122,23 @@ async def job_trade_signals(_=None):
         coin_signals = []
         for coin in all_coins:
             trend = await analyze_coin_trend(coin["symbol"], interval="Min15", limit=50)
-            if not trend:
-                continue
-            trend["symbol"] = coin["symbol"]
-            trend["lastPrice"] = coin["lastPrice"]
-            coin_signals.append(trend)
+            if trend:
+                trend["symbol"] = coin["symbol"]
+                trend["lastPrice"] = coin["lastPrice"]
+                coin_signals.append(trend)
 
         if not coin_signals:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không có tín hiệu nào khả dụng.")
+                                   text="⚠️ Không lấy được tín hiệu từ dữ liệu phân tích.")
             return
 
+        # Luôn lấy top 5, kể cả yếu
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
+
+        if all(c["is_weak"] for c in top5):
+            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
+                                   text="⚠️ Không có tín hiệu mạnh, hiển thị 5 tín hiệu tham khảo.")
 
         for idx, coin in enumerate(top5):
             mode = "Scalping" if idx < 3 else "Swing"
@@ -169,16 +173,13 @@ def setup_jobs(application):
     application.job_queue.run_daily(job_morning_message, time=time(6, 0, 0, tzinfo=tz))
     application.job_queue.run_daily(job_evening_summary, time=time(22, 0, 0, tzinfo=tz))
 
-    # 30 phút/lần: 06:00 → 21:30
+    # 30 phút/lần
     for h in range(6, 22):
         for m in [0, 30]:
-            # báo trước 1 phút, tránh m=-1
-            if m == 0 and h > 6:
-                application.job_queue.run_daily(job_trade_signals_notice, time=time(h-1, 59, 0, tzinfo=tz))
-            elif m == 30:
+            if m == 0:
+                application.job_queue.run_daily(job_trade_signals_notice, time=time(h, 59, 0, tzinfo=tz))
+            else:
                 application.job_queue.run_daily(job_trade_signals_notice, time=time(h, 29, 0, tzinfo=tz))
-
-            # giờ chính thức ra tín hiệu
             application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
 
     print("✅ Scheduler đã setup thành công!")
