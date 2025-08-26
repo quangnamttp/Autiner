@@ -1,5 +1,7 @@
 import aiohttp
 import traceback
+import os
+import json
 
 MEXC_BASE_URL = "https://contract.mexc.com"
 
@@ -125,7 +127,7 @@ async def get_orderbook(symbol: str, depth: int = 20):
 # =============================
 async def analyze_market_trend():
     try:
-        coins = await get_top_futures(limit=20)
+        coins = await get_top_futures(limit=50)
         if not coins:
             return {"trend": "❓ Không xác định", "long": 50, "short": 50}
 
@@ -146,5 +148,62 @@ async def analyze_market_trend():
             trend = "⚖️ Sideway"
 
         return {"trend": trend, "long": long_pct, "short": short_pct}
-    except:
+    except Exception as e:
+        print(f"[ERROR] analyze_market_trend: {e}")
         return {"trend": "❓ Không xác định", "long": 50, "short": 50}
+
+
+# =============================
+# Phân tích 1 coin (BẮT BUỘC AI)
+# =============================
+async def analyze_single_coin(symbol: str, interval="Min15", limit=50):
+    try:
+        klines = await get_kline(symbol, interval, limit)
+        funding = await get_funding_rate(symbol)
+        orderbook = await get_orderbook(symbol)
+        market_trend = await analyze_market_trend()
+
+        if not klines:
+            return None  # ❌ Không đủ dữ liệu thì bỏ qua
+
+        # Chuẩn bị dữ liệu thô gửi AI
+        raw_summary = {
+            "symbol": symbol,
+            "open": klines[0]["open"],
+            "close": klines[-1]["close"],
+            "high": max(k["high"] for k in klines),
+            "low": min(k["low"] for k in klines),
+            "funding": funding,
+            "orderbook": orderbook,
+            "market_trend": market_trend,
+        }
+
+        OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+        if not OPENROUTER_KEY:
+            print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
+            return None
+
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Bearer {OPENROUTER_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1"),
+                "messages": [
+                    {"role": "system", "content": "Bạn là chuyên gia phân tích kỹ thuật crypto. Hãy trả lời ngắn gọn, rõ ràng LONG hoặc SHORT, kèm strength %, TP, SL và lý do."},
+                    {"role": "user", "content": f"Phân tích coin {symbol} với dữ liệu: {json.dumps(raw_summary, ensure_ascii=False)}"}
+                ]
+            }
+            async with session.post("https://openrouter.ai/api/v1/chat/completions",
+                                     headers=headers, data=json.dumps(payload), timeout=30) as resp:
+                data = await resp.json()
+                if "choices" not in data:
+                    print("[AI ERROR] Không nhận được kết quả hợp lệ:", data)
+                    return None
+                ai_text = data["choices"][0]["message"]["content"]
+                return {"ai_analysis": ai_text}
+
+    except Exception as e:
+        print(f"[ERROR] analyze_single_coin({symbol}): {e}")
+        return None
