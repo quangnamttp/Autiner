@@ -6,7 +6,6 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
     analyze_coin_trend,
-    analyze_market_trend,
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -26,7 +25,7 @@ def format_price(value: float, currency: str = "USD", vnd_rate: float | None = N
             if not vnd_rate or vnd_rate <= 0:
                 return "N/A VND"
             value = value * vnd_rate
-            return f"{value:,.0f}".replace(",", ".")  # làm tròn, không thập phân
+            return f"{value:,.0f}".replace(",", ".")  # không thập phân, không số 0 dư
         else:
             s = f"{value:.6f}".rstrip("0").rstrip(".")
             if float(s) >= 1:
@@ -76,6 +75,7 @@ def create_trade_signal(symbol, side, entry_raw,
 
         symbol_display = symbol.replace("_USDT", f"/{currency_mode.upper()}")
 
+        # Độ mạnh hiển thị rõ
         if is_weak:
             strength_txt = "Tham khảo"
         elif strength >= 70:
@@ -102,7 +102,7 @@ def create_trade_signal(symbol, side, entry_raw,
 
 
 # =============================
-# Gửi tín hiệu giao dịch
+# Gửi tín hiệu giao dịch (3 Scalping + 2 Swing)
 # =============================
 async def job_trade_signals(_=None):
     try:
@@ -113,15 +113,7 @@ async def job_trade_signals(_=None):
         currency_mode = state.get("currency_mode", "USD")
         vnd_rate = await get_usdt_vnd_rate() if currency_mode == "VND" else None
 
-        # Lấy xu hướng thị trường
-        market = await analyze_market_trend()
-        global_trend = "SIDEWAY"
-        if "TĂNG" in market["trend"]:
-            global_trend = "LONG"
-        elif "GIẢM" in market["trend"]:
-            global_trend = "SHORT"
-
-        all_coins = await get_top_futures(limit=30)
+        all_coins = await get_top_futures(limit=20)
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Không lấy được dữ liệu coin từ sàn.")
@@ -140,16 +132,11 @@ async def job_trade_signals(_=None):
                                    text="⚠️ Không lấy được tín hiệu từ dữ liệu phân tích.")
             return
 
-        # Ưu tiên lọc tín hiệu theo xu hướng thị trường
-        if global_trend in ["LONG", "SHORT"]:
-            filtered = [c for c in coin_signals if c["side"] == global_trend]
-            if len(filtered) >= 5:
-                coin_signals = filtered
-
-        # Luôn lấy top 5
+        # Lấy top 5
         coin_signals.sort(key=lambda x: x["strength"], reverse=True)
         top5 = coin_signals[:5]
 
+        # Nếu tất cả yếu → cảnh báo
         if all(c["is_weak"] for c in top5):
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
                                    text="⚠️ Tất cả tín hiệu yếu → chỉ nên tham khảo.")
@@ -167,7 +154,7 @@ async def job_trade_signals(_=None):
                 reason=coin["reason"],
                 is_weak=coin["is_weak"]
             )
-            if idx == 0 and msg:
+            if idx == 0:
                 msg = msg.replace("📈", "📈⭐", 1)
             if msg:
                 await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
@@ -183,14 +170,18 @@ async def job_trade_signals(_=None):
 def setup_jobs(application):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
 
+    # Daily jobs
     application.job_queue.run_daily(job_morning_message, time=time(6, 0, 0, tzinfo=tz))
     application.job_queue.run_daily(job_evening_summary, time=time(22, 0, 0, tzinfo=tz))
 
+    # 30 phút/lần
     for h in range(6, 22):
         for m in [0, 30]:
             notice_minute = m - 1 if m > 0 else 59
             notice_hour = h if m > 0 else (h - 1 if h > 6 else 6)
-            application.job_queue.run_daily(job_trade_signals_notice, time=time(notice_hour, notice_minute, 0, tzinfo=tz))
-            application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
+            application.job_queue.run_daily(job_trade_signals_notice,
+                                            time=time(notice_hour, notice_minute, 0, tzinfo=tz))
+            application.job_queue.run_daily(job_trade_signals,
+                                            time=time(h, m, 0, tzinfo=tz))
 
     print("✅ Scheduler đã setup thành công!")
