@@ -4,7 +4,7 @@ import traceback
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy dữ liệu ticker Futures (Top 20, giá > 0.01)
+# Lấy danh sách coin Futures
 # =============================
 async def get_top_futures(limit: int = 20):
     try:
@@ -18,20 +18,18 @@ async def get_top_futures(limit: int = 20):
 
                 coins = []
                 for t in tickers:
-                    symbol = t.get("symbol", "")
-                    if not symbol.endswith("_USDT"):
+                    if not t.get("symbol", "").endswith("_USDT"):
                         continue
-                    last_price = float(t["lastPrice"])
-                    if last_price <= 0.01:   # ✅ chỉ lấy coin giá > 0.01
+                    last_price = float(t.get("lastPrice", 0))
+                    if last_price < 0.01:  # bỏ coin rác
                         continue
                     coins.append({
-                        "symbol": symbol,
+                        "symbol": t["symbol"],
                         "lastPrice": last_price,
                         "volume": float(t.get("amount24", 0)),
                         "change_pct": float(t.get("riseFallRate", 0)) * 100
                     })
 
-                # Sắp xếp theo volume giảm dần, lấy top N
                 coins.sort(key=lambda x: x["volume"], reverse=True)
                 return coins[:limit]
     except Exception as e:
@@ -41,7 +39,7 @@ async def get_top_futures(limit: int = 20):
 
 
 # =============================
-# Lấy tỷ giá USDT/VND
+# Lấy tỷ giá USDT/VND (Binance P2P)
 # =============================
 async def get_usdt_vnd_rate() -> float:
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
@@ -62,65 +60,91 @@ async def get_usdt_vnd_rate() -> float:
                     return 0
                 prices = [float(ad["adv"]["price"]) for ad in advs[:5] if "adv" in ad]
                 return sum(prices) / len(prices) if prices else 0
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] get_usdt_vnd_rate: {e}")
         return 0
 
 
 # =============================
-# Phân tích xu hướng coin (dựa trên % thay đổi 24h)
+# Kline (nến)
 # =============================
-async def analyze_coin_trend(symbol: str, last_price: float, change_pct: float):
+async def get_kline(symbol: str, interval: str = "Min15", limit: int = 50):
     try:
-        side = "LONG" if change_pct >= 0 else "SHORT"
-        strength = min(100, max(50, abs(change_pct) * 10))  # scale strength 50–100
-        reason = f"Biến động 24h: {change_pct:.2f}% → Xu hướng {side}"
-
-        return {
-            "side": side,
-            "strength": round(strength, 1),
-            "reason": reason,
-            "lastPrice": last_price,
-            "is_weak": strength < 60
-        }
+        url = f"{MEXC_BASE_URL}/api/v1/contract/kline/{symbol}?interval={interval}&limit={limit}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                if not data or "data" not in data:
+                    return []
+                return [
+                    {"time": k[0], "open": float(k[1]), "high": float(k[2]),
+                     "low": float(k[3]), "close": float(k[4]), "volume": float(k[5])}
+                    for k in data["data"]
+                ]
     except Exception as e:
-        print(f"[ERROR] analyze_coin_trend({symbol}): {e}")
-        return {
-            "side": "LONG",
-            "strength": 50,
-            "reason": "Error fallback",
-            "lastPrice": last_price,
-            "is_weak": True
-        }
+        print(f"[ERROR] get_kline({symbol}): {e}")
+        return []
 
 
 # =============================
-# Phân tích xu hướng thị trường (Daily)
+# Funding rate
+# =============================
+async def get_funding_rate(symbol: str) -> float:
+    try:
+        url = f"{MEXC_BASE_URL}/api/v1/contract/funding_rate/{symbol}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                return float(data.get("data", {}).get("rate", 0))
+    except Exception as e:
+        print(f"[ERROR] get_funding_rate({symbol}): {e}")
+        return 0
+
+
+# =============================
+# Orderbook
+# =============================
+async def get_orderbook(symbol: str, depth: int = 20):
+    try:
+        url = f"{MEXC_BASE_URL}/api/v1/contract/depth/{symbol}?limit={depth}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                if not data or "data" not in data:
+                    return {}
+                bids = sum(float(b[1]) for b in data["data"].get("bids", []))
+                asks = sum(float(a[1]) for a in data["data"].get("asks", []))
+                return {"bids": bids, "asks": asks}
+    except Exception as e:
+        print(f"[ERROR] get_orderbook({symbol}): {e}")
+        return {}
+
+
+# =============================
+# Market trend (daily summary)
 # =============================
 async def analyze_market_trend():
     try:
-        coins = await get_top_futures(limit=20)  # ✅ lấy top 20
+        coins = await get_top_futures(limit=20)
         if not coins:
-            return {"long": 50, "short": 50, "trend": "❓ Không xác định", "top": []}
+            return {"trend": "❓ Không xác định", "long": 50, "short": 50}
 
         long_vol = sum(c["volume"] for c in coins if c["change_pct"] > 0)
         short_vol = sum(c["volume"] for c in coins if c["change_pct"] < 0)
-        total_vol = long_vol + short_vol
+        total = long_vol + short_vol
+        if total == 0:
+            return {"trend": "⚖️ Sideway", "long": 50, "short": 50}
 
-        if total_vol == 0:
-            return {"long": 50, "short": 50, "trend": "⚖️ Sideway", "top": []}
-
-        long_pct = round(long_vol / total_vol * 100, 1)
-        short_pct = round(short_vol / total_vol * 100, 1)
+        long_pct = round(long_vol / total * 100, 1)
+        short_pct = round(short_vol / total * 100, 1)
 
         if long_pct > short_pct + 5:
-            trend = "📈 Xu hướng TĂNG (phe LONG chiếm ưu thế)"
+            trend = "📈 Xu hướng TĂNG"
         elif short_pct > long_pct + 5:
-            trend = "📉 Xu hướng GIẢM (phe SHORT chiếm ưu thế)"
+            trend = "📉 Xu hướng GIẢM"
         else:
-            trend = "⚖️ Thị trường sideway"
+            trend = "⚖️ Sideway"
 
-        top = sorted(coins, key=lambda x: abs(x["change_pct"]), reverse=True)[:5]
-
-        return {"long": long_pct, "short": short_pct, "trend": trend, "top": top}
-    except Exception:
-        return {"long": 50, "short": 50, "trend": "❓ Không xác định", "top": []}
+        return {"trend": trend, "long": long_pct, "short": short_pct}
+    except:
+        return {"trend": "❓ Không xác định", "long": 50, "short": 50}
