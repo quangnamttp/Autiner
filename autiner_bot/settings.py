@@ -11,10 +11,12 @@ class Settings:
     # Timezone
     TZ_NAME: str = os.getenv("TZ_NAME", "Asia/Ho_Chi_Minh")
 
-    # AI config (OpenRouter)
+    # AI phân tích tín hiệu (qua OpenRouter)
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
-    OPENROUTER_API_URL: str = "https://openrouter.ai/api/v1/chat/completions"
-    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1")  
-    # 👉 bạn có thể đổi sang "meta-llama/llama-3.3-70b-instruct" nếu thích
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1")
+    OPENROUTER_API_URL: str = os.getenv(
+        "OPENROUTER_API_URL",
+        "https://openrouter.ai/api/v1/chat/completions"
+    )
 
 S = Settings()
