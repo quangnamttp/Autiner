@@ -69,7 +69,7 @@ async def get_usdt_vnd_rate() -> float:
 
 
 # =============================
-# EMA
+# EMA helper
 # =============================
 def calc_ema(values, period):
     if len(values) < period:
@@ -143,15 +143,15 @@ async def get_orderbook(symbol: str, depth: int = 20) -> dict:
 
 
 # =============================
-# Phân tích xu hướng 1 coin (EMA6 / EMA12 / EMA20)
+# Phân tích xu hướng 1 coin (EMA6-EMA12-EMA20)
 # =============================
-async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
+async def analyze_coin_trend(symbol: str, interval="Min15", limit=100):
     try:
         klines = await get_kline(symbol, interval, limit)
-        if not klines or len(klines) < 20:
+        if not klines or len(klines) < 30:
             return {
                 "side": "LONG",
-                "strength": 0,
+                "strength": 10,
                 "reason": "Không đủ dữ liệu",
                 "is_weak": True
             }
@@ -163,36 +163,34 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=50):
         ema12 = calc_ema(closes, 12)
         ema20 = calc_ema(closes, 20)
 
-        # strength = độ chênh EMA6 - EMA12 (% giá)
-        diff = abs(ema6 - ema12) / last * 100
-        strength = round(diff * 100, 1)
-
-        # xu hướng cơ bản
-        side = "LONG" if ema6 > ema12 else "SHORT"
-
-        # check EMA20 để xác nhận
-        if side == "LONG" and ema12 < ema20:
-            reason = f"EMA6={ema6:.3f}>EMA12={ema12:.3f} nhưng EMA20={ema20:.3f} cao hơn → yếu"
-            is_weak = True
-        elif side == "SHORT" and ema12 > ema20:
-            reason = f"EMA6={ema6:.3f}<EMA12={ema12:.3f} nhưng EMA20={ema20:.3f} thấp hơn → yếu"
-            is_weak = True
+        # logic xu hướng
+        if ema6 > ema12 > ema20:
+            side = "LONG"
+            strength = 70
+            reason = f"EMA6={ema6:.3f} > EMA12={ema12:.3f} > EMA20={ema20:.3f} (Tăng rõ)"
+        elif ema6 < ema12 < ema20:
+            side = "SHORT"
+            strength = 70
+            reason = f"EMA6={ema6:.3f} < EMA12={ema12:.3f} < EMA20={ema20:.3f} (Giảm rõ)"
         else:
-            reason = f"EMA6={ema6:.3f}, EMA12={ema12:.3f}, EMA20={ema20:.3f}, Close={last:.3f}"
-            is_weak = strength < 30
+            side = "LONG"
+            strength = 30
+            reason = f"EMA lộn xộn → Sideway ({ema6:.3f}, {ema12:.3f}, {ema20:.3f})"
 
         return {
             "side": side,
             "strength": strength,
             "reason": reason,
-            "is_weak": is_weak
+            "ema6": ema6,
+            "ema12": ema12,
+            "ema20": ema20,
+            "is_weak": strength < 50
         }
-
     except Exception as e:
         print(f"[ERROR] analyze_coin_trend({symbol}): {e}")
         return {
             "side": "LONG",
-            "strength": 0,
+            "strength": 10,
             "reason": "Error",
             "is_weak": True
         }
