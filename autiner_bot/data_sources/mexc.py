@@ -69,7 +69,7 @@ async def get_usdt_vnd_rate() -> float:
 
 
 # =============================
-# EMA helper
+# EMA
 # =============================
 def calc_ema(values, period):
     if len(values) < period:
@@ -84,7 +84,7 @@ def calc_ema(values, period):
 # =============================
 # Kline
 # =============================
-async def get_kline(symbol: str, interval: str = "Min5", limit: int = 200):
+async def get_kline(symbol: str, interval: str = "Min15", limit: int = 100):
     try:
         url = f"{MEXC_BASE_URL}/api/v1/contract/kline/{symbol}?interval={interval}&limit={limit}"
         async with aiohttp.ClientSession() as session:
@@ -103,58 +103,13 @@ async def get_kline(symbol: str, interval: str = "Min5", limit: int = 200):
 
 
 # =============================
-# Funding Rate
-# =============================
-async def get_funding_rate(symbol: str) -> float:
-    try:
-        url = f"{MEXC_BASE_URL}/api/v1/contract/funding_rate/{symbol}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                if resp.status != 200:
-                    return 0
-                data = await resp.json()
-                if not data or "data" not in data:
-                    return 0
-                return float(data["data"].get("rate", 0))
-    except Exception as e:
-        print(f"[ERROR] get_funding_rate({symbol}): {e}")
-        return 0
-
-
-# =============================
-# Orderbook
-# =============================
-async def get_orderbook(symbol: str, depth: int = 20) -> dict:
-    try:
-        url = f"{MEXC_BASE_URL}/api/v1/contract/depth/{symbol}?limit={depth}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                if resp.status != 200:
-                    return {}
-                data = await resp.json()
-                if not data or "data" not in data:
-                    return {}
-                bids = sum(float(b[1]) for b in data["data"].get("bids", []))
-                asks = sum(float(a[1]) for a in data["data"].get("asks", []))
-                return {"bids": bids, "asks": asks}
-    except Exception as e:
-        print(f"[ERROR] get_orderbook({symbol}): {e}")
-        return {}
-
-
-# =============================
-# Phân tích xu hướng 1 coin (EMA6-EMA12-EMA20)
+# Phân tích xu hướng 1 coin (EMA6 / EMA12 / EMA20)
 # =============================
 async def analyze_coin_trend(symbol: str, interval="Min15", limit=100):
     try:
         klines = await get_kline(symbol, interval, limit)
-        if not klines or len(klines) < 30:
-            return {
-                "side": "LONG",
-                "strength": 10,
-                "reason": "Không đủ dữ liệu",
-                "is_weak": True
-            }
+        if not klines or len(klines) < 20:
+            return None
 
         closes = [k["close"] for k in klines]
         last = closes[-1]
@@ -163,68 +118,29 @@ async def analyze_coin_trend(symbol: str, interval="Min15", limit=100):
         ema12 = calc_ema(closes, 12)
         ema20 = calc_ema(closes, 20)
 
-        # logic xu hướng
+        # Xu hướng chính
         if ema6 > ema12 > ema20:
             side = "LONG"
-            strength = 70
-            reason = f"EMA6={ema6:.3f} > EMA12={ema12:.3f} > EMA20={ema20:.3f} (Tăng rõ)"
         elif ema6 < ema12 < ema20:
             side = "SHORT"
-            strength = 70
-            reason = f"EMA6={ema6:.3f} < EMA12={ema12:.3f} < EMA20={ema20:.3f} (Giảm rõ)"
         else:
-            side = "LONG"
-            strength = 30
-            reason = f"EMA lộn xộn → Sideway ({ema6:.3f}, {ema12:.3f}, {ema20:.3f})"
+            side = "LONG" if ema6 > ema20 else "SHORT"
+
+        # Strength dựa EMA6-EMA20
+        diff = abs(ema6 - ema20) / last * 100
+        strength = min(100, max(50, diff * 10))  # scale từ 50–100
+
+        reason = f"EMA6={ema6:.3f}, EMA12={ema12:.3f}, EMA20={ema20:.3f}"
 
         return {
             "side": side,
-            "strength": strength,
+            "strength": round(strength, 1),
             "reason": reason,
             "ema6": ema6,
             "ema12": ema12,
             "ema20": ema20,
-            "is_weak": strength < 50
+            "is_weak": False  # không còn 'tham khảo'
         }
     except Exception as e:
         print(f"[ERROR] analyze_coin_trend({symbol}): {e}")
-        return {
-            "side": "LONG",
-            "strength": 10,
-            "reason": "Error",
-            "is_weak": True
-        }
-
-
-# =============================
-# Phân tích xu hướng thị trường (Daily)
-# =============================
-async def analyze_market_trend():
-    try:
-        coins = await get_top_futures(limit=15)
-        if not coins:
-            return {"long": 50.0, "short": 50.0, "trend": "❓ Không xác định", "top": []}
-
-        long_vol = sum(c["volume"] for c in coins if c["change_pct"] > 0)
-        short_vol = sum(c["volume"] for c in coins if c["change_pct"] < 0)
-        total_vol = long_vol + short_vol
-
-        if total_vol == 0:
-            long_pct, short_pct = 50.0, 50.0
-        else:
-            long_pct = round(long_vol / total_vol * 100, 1)
-            short_pct = round(short_vol / total_vol * 100, 1)
-
-        if long_pct > short_pct + 5:
-            trend = "📈 Xu hướng TĂNG (phe LONG chiếm ưu thế)"
-        elif short_pct > long_pct + 5:
-            trend = "📉 Xu hướng GIẢM (phe SHORT chiếm ưu thế)"
-        else:
-            trend = "⚖️ Thị trường sideway"
-
-        top = sorted(coins, key=lambda x: abs(x.get("change_pct", 0)), reverse=True)[:5]
-
-        return {"long": long_pct, "short": short_pct, "trend": trend, "top": top}
-    except Exception as e:
-        print(f"[ERROR] analyze_market_trend: {e}")
-        return {"long": 50.0, "short": 50.0, "trend": "❓ Không xác định", "top": []}
+        return None
