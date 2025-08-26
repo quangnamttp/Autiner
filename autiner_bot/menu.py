@@ -5,7 +5,7 @@ from autiner_bot.scheduler import job_trade_signals_notice, job_trade_signals
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
-    analyze_coin_trend,
+    analyze_single_coin,
     get_top_futures
 )
 from autiner_bot.utils.time_utils import get_vietnam_time
