@@ -5,7 +5,6 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
-    analyze_coin_trend,
 )
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
@@ -59,7 +58,7 @@ async def job_trade_signals_notice(_=None):
 # =============================
 def create_trade_signal(symbol, side, entry_raw,
                         mode="Scalping", currency_mode="USD",
-                        vnd_rate=None, strength=0, reason="No data"):
+                        vnd_rate=None):
     try:
         entry_price = format_price(entry_raw, currency_mode, vnd_rate)
 
@@ -75,13 +74,6 @@ def create_trade_signal(symbol, side, entry_raw,
 
         symbol_display = symbol.replace("_USDT", f"/{currency_mode.upper()}")
 
-        if strength >= 70:
-            strength_txt = f"{strength:.0f}% (Mạnh)"
-        elif strength >= 50:
-            strength_txt = f"{strength:.0f}% (Tiêu chuẩn)"
-        else:
-            strength_txt = f"{strength:.0f}% (Yếu)"
-
         msg = (
             f"📈 {symbol_display} — {'🟢 LONG' if side=='LONG' else '🟥 SHORT'}\n\n"
             f"🟢 Loại lệnh: {mode}\n"
@@ -89,8 +81,8 @@ def create_trade_signal(symbol, side, entry_raw,
             f"💰 Entry: {entry_price} {currency_mode}\n"
             f"🎯 TP: {tp} {currency_mode}\n"
             f"🛡️ SL: {sl} {currency_mode}\n"
-            f"📊 Độ mạnh: {strength_txt}\n"
-            f"📌 Lý do: {reason}\n"
+            f"📊 Độ mạnh: 100% (Theo xu hướng giá)\n"
+            f"📌 Lý do: Coin đang {'tăng' if side=='LONG' else 'giảm'} theo xu hướng thị trường\n"
             f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
         )
         return msg
@@ -110,26 +102,24 @@ async def job_trade_signals(_=None):
         currency_mode = state.get("currency_mode", "USD")
         vnd_rate = await get_usdt_vnd_rate() if currency_mode == "VND" else None
 
+        # lấy top 20 coin từ futures
         all_coins = await get_top_futures(limit=20)
         if not all_coins:
             await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không lấy được dữ liệu coin từ sàn.")
+                                   text="⚠️ Không lấy được dữ liệu coin từ MEXC Futures.")
             return
 
+        # lọc xu hướng: tăng -> LONG, giảm -> SHORT
         coin_signals = []
         for coin in all_coins:
-            trend = await analyze_coin_trend(coin["symbol"], interval="Min15", limit=50)
-            if trend:
-                trend["symbol"] = coin["symbol"]
-                trend["lastPrice"] = coin["lastPrice"]
-                coin_signals.append(trend)
+            side = "LONG" if coin["change_pct"] > 0 else "SHORT"
+            coin_signals.append({
+                "symbol": coin["symbol"],
+                "side": side,
+                "lastPrice": coin["lastPrice"]
+            })
 
-        if not coin_signals:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không lấy được tín hiệu từ dữ liệu phân tích.")
-            return
-
-        coin_signals.sort(key=lambda x: x["strength"], reverse=True)
+        # lấy 5 coin đầu tiên
         top5 = coin_signals[:5]
 
         for idx, coin in enumerate(top5):
@@ -141,8 +131,6 @@ async def job_trade_signals(_=None):
                 mode=mode,
                 currency_mode=currency_mode,
                 vnd_rate=vnd_rate,
-                strength=coin["strength"],
-                reason=coin["reason"],
             )
             if idx == 0:
                 msg = msg.replace("📈", "📈⭐", 1)
