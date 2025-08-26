@@ -5,18 +5,16 @@ from dataclasses import dataclass
 @dataclass
 class Settings:
     # Telegram bot config
-    TELEGRAM_BOT_TOKEN: str = os.environ["TELEGRAM_BOT_TOKEN"]
-    TELEGRAM_ALLOWED_USER_ID: int = int(os.environ["TELEGRAM_ALLOWED_USER_ID"])
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_ALLOWED_USER_ID: int = int(os.getenv("TELEGRAM_ALLOWED_USER_ID", "0"))
 
     # Timezone
     TZ_NAME: str = os.getenv("TZ_NAME", "Asia/Ho_Chi_Minh")
 
-    # OpenAI API (bắt buộc phải có, không fallback)
-    OPENAI_API_KEY: str = os.environ["OPENAI_API_KEY"]
-
-    # Nếu sau này bạn cần thêm chức năng trade trực tiếp,
-    # mới bật lại API Key/Secret ở đây
-    # MEXC_API_KEY: str = os.getenv("MEXC_API_KEY", "")
-    # MEXC_API_SECRET: str = os.getenv("MEXC_API_SECRET", "")
+    # AI config (OpenRouter)
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    OPENROUTER_API_URL: str = "https://openrouter.ai/api/v1/chat/completions"
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1")  
+    # 👉 bạn có thể đổi sang "meta-llama/llama-3.3-70b-instruct" nếu thích
 
 S = Settings()
