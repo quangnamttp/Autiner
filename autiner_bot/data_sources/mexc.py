@@ -125,8 +125,7 @@ async def get_funding_rate(symbol: str) -> float:
                 if not data or "data" not in data:
                     return 0
                 return float(data["data"].get("rate", 0))
-    except Exception as e:
-        print(f"[ERROR] get_funding_rate({symbol}): {e}")
+    except Exception:
         return 0
 
 
@@ -152,13 +151,18 @@ async def get_orderbook(symbol: str, depth: int = 20) -> dict:
 
 
 # =============================
-# Phân tích xu hướng 1 coin (EMA + RSI + Funding + Orderbook)
+# Phân tích xu hướng 1 coin
 # =============================
 async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
     try:
         klines = await get_kline(symbol, interval, limit)
-        if not klines or len(klines) < 50:
-            return None
+        if not klines or len(klines) < 30:
+            return {
+                "side": "LONG",
+                "strength": 10,
+                "reason": "Không đủ dữ liệu",
+                "is_weak": True
+            }
 
         closes = [k["close"] for k in klines]
         last = closes[-1]
@@ -169,12 +173,10 @@ async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
         funding = await get_funding_rate(symbol)
         orderbook = await get_orderbook(symbol)
 
-        # Xu hướng cơ bản theo EMA
         side = "LONG" if ema9 > ema21 else "SHORT"
 
-        # Strength cơ bản
         diff = abs(ema9 - ema21) / last * 100
-        strength = diff * 100
+        strength = diff * 50  # scale lại strength cho dễ vượt ngưỡng
 
         reasons = [
             f"EMA9={ema9:.3f}, EMA21={ema21:.3f}",
@@ -182,15 +184,13 @@ async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
             f"Funding={funding:.4f}"
         ]
 
-        # RSI xác nhận
         if side == "LONG" and rsi > 55:
             reasons.append("RSI>55 (ủng hộ LONG)")
-            strength += 10
+            strength += 15
         elif side == "SHORT" and rsi < 45:
             reasons.append("RSI<45 (ủng hộ SHORT)")
-            strength += 10
+            strength += 15
 
-        # Funding xác nhận
         if side == "LONG" and funding >= 0:
             reasons.append("Funding ≥ 0 (ủng hộ LONG)")
             strength += 5
@@ -198,14 +198,13 @@ async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
             reasons.append("Funding ≤ 0 (ủng hộ SHORT)")
             strength += 5
 
-        # Orderbook xác nhận
         if orderbook:
             bids, asks = orderbook.get("bids", 0), orderbook.get("asks", 0)
             if side == "LONG" and bids > asks:
-                reasons.append("Orderbook BUY > SELL")
+                reasons.append("Orderbook BUY>SELL")
                 strength += 5
             elif side == "SHORT" and asks > bids:
-                reasons.append("Orderbook SELL > BUY")
+                reasons.append("Orderbook SELL>BUY")
                 strength += 5
 
         return {
@@ -217,15 +216,20 @@ async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
             "rsi": rsi,
             "funding": funding,
             "orderbook": orderbook,
-            "is_weak": strength < 50
+            "is_weak": strength < 30   # nới lỏng điều kiện
         }
     except Exception as e:
         print(f"[ERROR] analyze_coin_trend({symbol}): {e}")
-        return None
+        return {
+            "side": "LONG",
+            "strength": 10,
+            "reason": "Error",
+            "is_weak": True
+        }
 
 
 # =============================
-# Phân tích xu hướng thị trường (Daily)
+# Phân tích xu hướng thị trường
 # =============================
 async def analyze_market_trend():
     try:
