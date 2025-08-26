@@ -5,8 +5,11 @@ from autiner_bot.utils.time_utils import get_vietnam_time
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
+    get_kline,
+    get_funding_rate,
+    get_orderbook,
+    analyze_market_trend,
 )
-from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 
 import traceback
 import pytz
@@ -18,80 +21,60 @@ bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 # =============================
 # Format giá
 # =============================
-def format_price(value: float, currency: str = "USD", vnd_rate: float | None = None) -> str:
+def format_price(value, currency="USD", vnd_rate=None):
     try:
-        if currency == "VND":
-            if not vnd_rate or vnd_rate <= 0:
-                return "N/A VND"
+        if currency == "VND" and vnd_rate:
             value = value * vnd_rate
             return f"{value:,.0f}".replace(",", ".")
         else:
-            s = f"{value:.6f}".rstrip("0").rstrip(".")
-            if float(s) >= 1:
-                if "." in s:
-                    int_part, dec_part = s.split(".")
-                    int_part = f"{int(int_part):,}".replace(",", ".")
-                    s = f"{int_part}.{dec_part}" if dec_part else int_part
-                else:
-                    s = f"{int(s):,}".replace(",", ".")
-            return s
-    except Exception:
+            return f"{value:.6f}".rstrip("0").rstrip(".")
+    except:
         return str(value)
 
 
 # =============================
-# Notice trước khi ra tín hiệu
+# AI giả lập phân tích xu hướng
 # =============================
-async def job_trade_signals_notice(_=None):
-    try:
-        state = get_state()
-        if not state["is_on"]:
-            return
-        msg = "⏳ 1 phút nữa sẽ có tín hiệu giao dịch, chuẩn bị sẵn sàng!"
-        await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
-    except Exception as e:
-        print(f"[ERROR] job_trade_signals_notice: {e}")
+async def ai_analyze_signal(symbol, price, klines, funding, orderbook, market_trend):
+    """
+    Ở đây có thể tích hợp AI model thật,
+    tạm thời viết logic mô phỏng theo xu hướng giá + market trend.
+    """
+    if not klines:
+        return {"side": "LONG", "strength": 10, "reason": "Không đủ dữ liệu"}
 
+    change = price - klines[0]["close"]
+    side = "LONG" if change > 0 else "SHORT"
+    strength = min(100, abs(change) / price * 500)  # scale độ mạnh
 
-# =============================
-# Tạo tín hiệu giao dịch
-# =============================
-def create_trade_signal(symbol, side, entry_raw,
-                        mode="Scalping", currency_mode="USD",
-                        vnd_rate=None):
-    try:
-        entry_price = format_price(entry_raw, currency_mode, vnd_rate)
-
-        if side == "LONG":
-            tp_val = entry_raw * (1.01 if mode == "Scalping" else 1.02)
-            sl_val = entry_raw * (0.99 if mode == "Scalping" else 0.98)
-        else:  # SHORT
-            tp_val = entry_raw * (0.99 if mode == "Scalping" else 0.98)
-            sl_val = entry_raw * (1.01 if mode == "Scalping" else 1.02)
-
-        tp = format_price(tp_val, currency_mode, vnd_rate)
-        sl = format_price(sl_val, currency_mode, vnd_rate)
-
-        symbol_display = symbol.replace("_USDT", f"/{currency_mode.upper()}")
-
-        msg = (
-            f"📈 {symbol_display} — {'🟢 LONG' if side=='LONG' else '🟥 SHORT'}\n\n"
-            f"🟢 Loại lệnh: {mode}\n"
-            f"🔹 Kiểu vào lệnh: Market\n"
-            f"💰 Entry: {entry_price} {currency_mode}\n"
-            f"🎯 TP: {tp} {currency_mode}\n"
-            f"🛡️ SL: {sl} {currency_mode}\n"
-            f"📊 Độ mạnh: 100% (Theo xu hướng giá)\n"
-            f"📌 Lý do: Coin đang {'tăng' if side=='LONG' else 'giảm'} theo xu hướng thị trường\n"
-            f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
-        )
-        return msg
-    except Exception:
-        return None
+    reason = f"Xu hướng {side}, Funding={funding:.4f}, Orderbook={orderbook}, Thị trường={market_trend['trend']}"
+    return {"side": side, "strength": round(strength, 1), "reason": reason}
 
 
 # =============================
-# Gửi tín hiệu giao dịch (3 Scalping + 2 Swing)
+# Tạo tín hiệu
+# =============================
+def create_trade_signal(symbol, side, entry, mode, currency_mode, vnd_rate, strength, reason):
+    entry_price = format_price(entry, currency_mode, vnd_rate)
+    tp = format_price(entry * (1.01 if side == "LONG" else 0.99), currency_mode, vnd_rate)
+    sl = format_price(entry * (0.99 if side == "LONG" else 1.01), currency_mode, vnd_rate)
+
+    return (
+        f"📈 {symbol.replace('_USDT','/'+currency_mode)} — "
+        f"{'🟢 LONG' if side=='LONG' else '🟥 SHORT'}\n\n"
+        f"🟢 Loại lệnh: {mode}\n"
+        f"🔹 Kiểu vào lệnh: Market\n"
+        f"💰 Entry: {entry_price} {currency_mode}\n"
+        f"🎯 TP: {tp} {currency_mode}\n"
+        f"🛡️ SL: {sl} {currency_mode}\n"
+        f"📊 Độ mạnh: {strength}%\n"
+        f"📌 Lý do: {reason}\n"
+        f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
+    )
+
+
+# =============================
+# Gửi tín hiệu
 # =============================
 async def job_trade_signals(_=None):
     try:
@@ -101,41 +84,36 @@ async def job_trade_signals(_=None):
 
         currency_mode = state.get("currency_mode", "USD")
         vnd_rate = await get_usdt_vnd_rate() if currency_mode == "VND" else None
+        market_trend = await analyze_market_trend()
 
-        # lấy top 20 coin từ futures
         all_coins = await get_top_futures(limit=20)
         if not all_coins:
-            await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID,
-                                   text="⚠️ Không lấy được dữ liệu coin từ MEXC Futures.")
+            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, "⚠️ Không lấy được dữ liệu coin.")
             return
 
-        # lọc xu hướng: tăng -> LONG, giảm -> SHORT
-        coin_signals = []
+        signals = []
         for coin in all_coins:
-            side = "LONG" if coin["change_pct"] > 0 else "SHORT"
-            coin_signals.append({
-                "symbol": coin["symbol"],
-                "side": side,
-                "lastPrice": coin["lastPrice"]
-            })
+            klines = await get_kline(coin["symbol"], "Min15", 50)
+            funding = await get_funding_rate(coin["symbol"])
+            orderbook = await get_orderbook(coin["symbol"])
+            ai_signal = await ai_analyze_signal(coin["symbol"], coin["lastPrice"], klines, funding, orderbook, market_trend)
+            ai_signal["symbol"] = coin["symbol"]
+            ai_signal["price"] = coin["lastPrice"]
+            signals.append(ai_signal)
 
-        # lấy 5 coin đầu tiên
-        top5 = coin_signals[:5]
+        # lấy 5 tín hiệu mạnh nhất
+        signals.sort(key=lambda x: x["strength"], reverse=True)
+        top5 = signals[:5]
 
-        for idx, coin in enumerate(top5):
+        for idx, sig in enumerate(top5):
             mode = "Scalping" if idx < 3 else "Swing"
             msg = create_trade_signal(
-                symbol=coin["symbol"],
-                side=coin["side"],
-                entry_raw=coin["lastPrice"],
-                mode=mode,
-                currency_mode=currency_mode,
-                vnd_rate=vnd_rate,
+                sig["symbol"], sig["side"], sig["price"], mode,
+                currency_mode, vnd_rate, sig["strength"], sig["reason"]
             )
             if idx == 0:
                 msg = msg.replace("📈", "📈⭐", 1)
-            if msg:
-                await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
+            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, msg)
 
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
@@ -143,21 +121,11 @@ async def job_trade_signals(_=None):
 
 
 # =============================
-# Setup job vào job_queue
+# Setup job
 # =============================
 def setup_jobs(application):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
-
-    # Daily jobs
-    application.job_queue.run_daily(job_morning_message, time=time(6, 0, 0, tzinfo=tz))
-    application.job_queue.run_daily(job_evening_summary, time=time(22, 0, 0, tzinfo=tz))
-
-    # 30 phút/lần
     for h in range(6, 22):
         for m in [0, 30]:
-            notice_minute = m - 1 if m > 0 else 59
-            notice_hour = h if m > 0 else (h - 1 if h > 6 else 6)
-            application.job_queue.run_daily(job_trade_signals_notice, time=time(notice_hour, notice_minute, 0, tzinfo=tz))
             application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
-
     print("✅ Scheduler đã setup thành công!")
