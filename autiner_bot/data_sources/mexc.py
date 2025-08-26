@@ -152,7 +152,7 @@ async def get_orderbook(symbol: str, depth: int = 20) -> dict:
 
 
 # =============================
-# Phân tích xu hướng 1 coin
+# Phân tích xu hướng 1 coin (EMA + RSI + Funding + Orderbook)
 # =============================
 async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
     try:
@@ -166,31 +166,51 @@ async def analyze_coin_trend(symbol: str, interval="Min5", limit=200):
         ema9 = calc_ema(closes, 9)
         ema21 = calc_ema(closes, 21)
         rsi = calc_rsi(closes, 14)
-
         funding = await get_funding_rate(symbol)
         orderbook = await get_orderbook(symbol)
 
-        # Strength = độ chênh EMA (%)
-        diff = abs(ema9 - ema21) / last * 100
-        strength = round(diff * 100, 1)
-
+        # Xu hướng cơ bản theo EMA
         side = "LONG" if ema9 > ema21 else "SHORT"
 
+        # Strength cơ bản
+        diff = abs(ema9 - ema21) / last * 100
+        strength = diff * 100
+
         reasons = [
-            f"Funding={funding:.4f}",
+            f"EMA9={ema9:.3f}, EMA21={ema21:.3f}",
             f"RSI={rsi:.1f}",
-            f"EMA9={ema9:.3f}, EMA21={ema21:.3f}"
+            f"Funding={funding:.4f}"
         ]
 
+        # RSI xác nhận
+        if side == "LONG" and rsi > 55:
+            reasons.append("RSI>55 (ủng hộ LONG)")
+            strength += 10
+        elif side == "SHORT" and rsi < 45:
+            reasons.append("RSI<45 (ủng hộ SHORT)")
+            strength += 10
+
+        # Funding xác nhận
+        if side == "LONG" and funding >= 0:
+            reasons.append("Funding ≥ 0 (ủng hộ LONG)")
+            strength += 5
+        elif side == "SHORT" and funding <= 0:
+            reasons.append("Funding ≤ 0 (ủng hộ SHORT)")
+            strength += 5
+
+        # Orderbook xác nhận
         if orderbook:
-            reasons.append(
-                "Orderbook BUY>SELL" if orderbook.get("bids", 0) > orderbook.get("asks", 0)
-                else "Orderbook SELL>BUY"
-            )
+            bids, asks = orderbook.get("bids", 0), orderbook.get("asks", 0)
+            if side == "LONG" and bids > asks:
+                reasons.append("Orderbook BUY > SELL")
+                strength += 5
+            elif side == "SHORT" and asks > bids:
+                reasons.append("Orderbook SELL > BUY")
+                strength += 5
 
         return {
             "side": side,
-            "strength": strength,
+            "strength": round(strength, 1),
             "reason": ", ".join(reasons),
             "ema9": ema9,
             "ema21": ema21,
