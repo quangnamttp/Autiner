@@ -31,7 +31,7 @@ def format_price(value, currency="USD", vnd_rate=None):
 
 
 # =============================
-# Notice trước khi ra tín hiệu
+# Notice trước tín hiệu
 # =============================
 async def job_trade_signals_notice(_=None):
     try:
@@ -68,7 +68,7 @@ def create_trade_signal(symbol, side, entry, mode,
 
 
 # =============================
-# Gửi tín hiệu
+# Gửi tín hiệu (5 coin / 30 phút)
 # =============================
 async def job_trade_signals(_=None):
     try:
@@ -87,13 +87,12 @@ async def job_trade_signals(_=None):
 
         signals = []
         for coin in all_coins:
-            ai_signal = await analyze_single_coin(coin["symbol"], interval="Min15", limit=50)
+            ai_signal = await analyze_single_coin(coin["symbol"])
             if ai_signal:
                 ai_signal["symbol"] = coin["symbol"]
                 ai_signal["price"] = coin["lastPrice"]
                 signals.append(ai_signal)
 
-        # lấy 5 tín hiệu mạnh nhất
         signals.sort(key=lambda x: x.get("strength", 0), reverse=True)
         top5 = signals[:5]
 
@@ -106,7 +105,7 @@ async def job_trade_signals(_=None):
                 mode,
                 currency_mode,
                 vnd_rate,
-                sig.get("strength", 50),
+                sig.get("strength", 75),
                 sig.get("reason", "AI phân tích")
             )
             if idx == 0:
@@ -124,12 +123,9 @@ async def job_trade_signals(_=None):
 def setup_jobs(application):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
 
-    # Tín hiệu: 06:15 → 21:45 (mỗi 30 phút)
     for h in range(6, 22):
         for m in [15, 45]:
-            # báo trước 1 phút
-            notice_m = m - 1
-            application.job_queue.run_daily(job_trade_signals_notice, time=time(h, notice_m, 0, tzinfo=tz))
+            application.job_queue.run_daily(job_trade_signals_notice, time=time(h, m-1, 0, tzinfo=tz))
             application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
 
     print("✅ Scheduler đã setup thành công!")
