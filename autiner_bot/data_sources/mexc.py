@@ -1,12 +1,12 @@
 import aiohttp
 import traceback
+import os
 import json
-from autiner_bot.settings import S   # ✅ import config chung
 
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy danh sách coin Futures (lọc giá > 0.01)
+# Lấy danh sách coin Futures
 # =============================
 async def get_top_futures(limit: int = 50):
     try:
@@ -41,7 +41,7 @@ async def get_top_futures(limit: int = 50):
 
 
 # =============================
-# Lấy tỷ giá USDT/VND (Binance P2P)
+# Lấy tỷ giá USDT/VND
 # =============================
 async def get_usdt_vnd_rate() -> float:
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
@@ -100,56 +100,52 @@ async def analyze_market_trend():
 
 
 # =============================
-# Phân tích 1 coin (BẮT BUỘC AI)
+# AI phân tích coin
 # =============================
-async def analyze_single_coin(symbol: str):
+async def analyze_single_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
-        if not S.OPENROUTER_API_KEY:
+        OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+        if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
 
         async with aiohttp.ClientSession() as session:
             headers = {
-                "Authorization": f"Bearer {S.OPENROUTER_API_KEY}",
+                "Authorization": f"Bearer {OPENROUTER_KEY}",
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": S.OPENROUTER_MODEL,
+                "model": os.getenv("OPENROUTER_MODEL", "deepseek-r1t-chimera:free"),
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": "Bạn là chuyên gia phân tích crypto. Trả lời JSON với: side (LONG/SHORT), strength (%), reason."
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Phân tích coin {symbol} trên MEXC Futures và đưa ra tín hiệu giao dịch."
-                    }
+                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
+                    {"role": "user", "content": f"Phân tích coin {symbol}, giá={price}, biến động={change_pct}%, xu hướng thị trường={market_trend}"}
                 ]
             }
-            async with session.post(S.OPENROUTER_API_URL,
+            async with session.post("https://openrouter.ai/api/v1/chat/completions",
                                      headers=headers, data=json.dumps(payload), timeout=30) as resp:
                 data = await resp.json()
-
-                # 👇 In log chi tiết để debug
-                print("=== AI RAW RESPONSE ===")
-                print(json.dumps(data, indent=2, ensure_ascii=False))
-
                 if "choices" not in data:
-                    print("[AI ERROR] Không có 'choices'")
+                    print("[AI ERROR] Không nhận được choices:", data)
                     return None
 
                 ai_text = data["choices"][0]["message"]["content"]
 
+                # ép parse JSON
                 try:
                     result = json.loads(ai_text)
                 except:
                     side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
-                    return {"side": side, "strength": 75, "reason": ai_text}
+                    result = {"side": side, "strength": 70, "reason": ai_text}
+
+                # đảm bảo strength trong khoảng 50-100
+                strength = result.get("strength", 70)
+                if strength < 50: strength = 70
+                if strength > 100: strength = 100
 
                 return {
                     "side": result.get("side", "LONG"),
-                    "strength": result.get("strength", 75),
-                    "reason": result.get("reason", ai_text)
+                    "strength": strength,
+                    "reason": result.get("reason", "AI phân tích"),
                 }
 
     except Exception as e:
