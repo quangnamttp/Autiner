@@ -125,28 +125,27 @@ async def analyze_single_coin(symbol: str):
                                      headers=headers, data=json.dumps(payload), timeout=30) as resp:
                 data = await resp.json()
 
+                # 👇 In log chi tiết để debug
+                print("=== AI RAW RESPONSE ===")
+                print(json.dumps(data, indent=2, ensure_ascii=False))
+
                 if "choices" not in data:
-                    print("[AI ERROR]", data)  # log chi tiết
+                    print("[AI ERROR] Không có 'choices'")
                     return None
 
                 ai_text = data["choices"][0]["message"]["content"]
 
-                # --- Xử lý fallback ---
                 try:
-                    result = json.loads(ai_text)  # Nếu AI trả JSON
-                    return {
-                        "side": result.get("side", "LONG"),
-                        "strength": result.get("strength", 75),
-                        "reason": result.get("reason", ai_text)
-                    }
+                    result = json.loads(ai_text)
                 except:
-                    # Nếu không parse được JSON thì vẫn lấy text
                     side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
-                    return {
-                        "side": side,
-                        "strength": 75,
-                        "reason": ai_text
-                    }
+                    return {"side": side, "strength": 75, "reason": ai_text}
+
+                return {
+                    "side": result.get("side", "LONG"),
+                    "strength": result.get("strength", 75),
+                    "reason": result.get("reason", ai_text)
+                }
 
     except Exception as e:
         print(f"[ERROR] analyze_single_coin({symbol}): {e}")
