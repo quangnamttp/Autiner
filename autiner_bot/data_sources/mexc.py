@@ -6,18 +6,18 @@ import json
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy danh sách coin Futures
+# Lấy danh sách coin Futures (lọc giá > 0.01)
 # =============================
-async def get_top_futures(limit: int = 20):
+async def get_top_futures(limit: int = 50):
     try:
         url = f"{MEXC_BASE_URL}/api/v1/contract/ticker"
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
+            async with session.get(url, timeout=15) as resp:
                 data = await resp.json()
                 if not data or "data" not in data:
                     return []
-                tickers = data["data"]
 
+                tickers = data["data"]
                 coins = []
                 for t in tickers:
                     if not t.get("symbol", "").endswith("_USDT"):
@@ -55,7 +55,7 @@ async def get_usdt_vnd_rate() -> float:
     }
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=10) as resp:
+            async with session.post(url, json=payload, timeout=15) as resp:
                 data = await resp.json()
                 advs = data.get("data", [])
                 if not advs:
@@ -65,61 +65,6 @@ async def get_usdt_vnd_rate() -> float:
     except Exception as e:
         print(f"[ERROR] get_usdt_vnd_rate: {e}")
         return 0
-
-
-# =============================
-# Kline (nến)
-# =============================
-async def get_kline(symbol: str, interval: str = "Min15", limit: int = 50):
-    try:
-        url = f"{MEXC_BASE_URL}/api/v1/contract/kline/{symbol}?interval={interval}&limit={limit}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                if not data or "data" not in data:
-                    return []
-                return [
-                    {"time": k[0], "open": float(k[1]), "high": float(k[2]),
-                     "low": float(k[3]), "close": float(k[4]), "volume": float(k[5])}
-                    for k in data["data"]
-                ]
-    except Exception as e:
-        print(f"[ERROR] get_kline({symbol}): {e}")
-        return []
-
-
-# =============================
-# Funding rate
-# =============================
-async def get_funding_rate(symbol: str) -> float:
-    try:
-        url = f"{MEXC_BASE_URL}/api/v1/contract/funding_rate/{symbol}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                return float(data.get("data", {}).get("rate", 0))
-    except Exception as e:
-        print(f"[ERROR] get_funding_rate({symbol}): {e}")
-        return 0
-
-
-# =============================
-# Orderbook
-# =============================
-async def get_orderbook(symbol: str, depth: int = 20):
-    try:
-        url = f"{MEXC_BASE_URL}/api/v1/contract/depth/{symbol}?limit={depth}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                if not data or "data" not in data:
-                    return {}
-                bids = sum(float(b[1]) for b in data["data"].get("bids", []))
-                asks = sum(float(a[1]) for a in data["data"].get("asks", []))
-                return {"bids": bids, "asks": asks}
-    except Exception as e:
-        print(f"[ERROR] get_orderbook({symbol}): {e}")
-        return {}
 
 
 # =============================
@@ -134,6 +79,7 @@ async def analyze_market_trend():
         long_vol = sum(c["volume"] for c in coins if c["change_pct"] > 0)
         short_vol = sum(c["volume"] for c in coins if c["change_pct"] < 0)
         total = long_vol + short_vol
+
         if total == 0:
             return {"trend": "⚖️ Sideway", "long": 50, "short": 50}
 
@@ -156,28 +102,8 @@ async def analyze_market_trend():
 # =============================
 # Phân tích 1 coin (BẮT BUỘC AI)
 # =============================
-async def analyze_single_coin(symbol: str, interval="Min15", limit=50):
+async def analyze_single_coin(symbol: str):
     try:
-        klines = await get_kline(symbol, interval, limit)
-        funding = await get_funding_rate(symbol)
-        orderbook = await get_orderbook(symbol)
-        market_trend = await analyze_market_trend()
-
-        if not klines:
-            return None  # ❌ Không đủ dữ liệu thì bỏ qua
-
-        # Chuẩn bị dữ liệu thô gửi AI
-        raw_summary = {
-            "symbol": symbol,
-            "open": klines[0]["open"],
-            "close": klines[-1]["close"],
-            "high": max(k["high"] for k in klines),
-            "low": min(k["low"] for k in klines),
-            "funding": funding,
-            "orderbook": orderbook,
-            "market_trend": market_trend,
-        }
-
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
@@ -191,8 +117,8 @@ async def analyze_single_coin(symbol: str, interval="Min15", limit=50):
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia phân tích kỹ thuật crypto. Hãy trả lời ngắn gọn, rõ ràng LONG hoặc SHORT, kèm strength %, TP, SL và lý do."},
-                    {"role": "user", "content": f"Phân tích coin {symbol} với dữ liệu: {json.dumps(raw_summary, ensure_ascii=False)}"}
+                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời JSON với: side (LONG/SHORT), strength (%), reason."},
+                    {"role": "user", "content": f"Phân tích coin {symbol} trên MEXC Futures và đưa ra tín hiệu giao dịch."}
                 ]
             }
             async with session.post("https://openrouter.ai/api/v1/chat/completions",
@@ -202,7 +128,18 @@ async def analyze_single_coin(symbol: str, interval="Min15", limit=50):
                     print("[AI ERROR] Không nhận được kết quả hợp lệ:", data)
                     return None
                 ai_text = data["choices"][0]["message"]["content"]
-                return {"ai_analysis": ai_text}
+
+                try:
+                    result = json.loads(ai_text)
+                except:
+                    side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
+                    return {"side": side, "strength": 75, "reason": ai_text}
+
+                return {
+                    "side": result.get("side", "LONG"),
+                    "strength": result.get("strength", 75),
+                    "reason": result.get("reason", ai_text)
+                }
 
     except Exception as e:
         print(f"[ERROR] analyze_single_coin({symbol}): {e}")
