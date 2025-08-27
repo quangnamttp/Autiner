@@ -102,12 +102,20 @@ async def analyze_market_trend():
 # =============================
 # Phân tích 1 coin (BẮT BUỘC AI)
 # =============================
-async def analyze_single_coin(symbol: str):
+async def analyze_single_coin(symbol: str, price: float = None, change_pct: float = None, market_trend: dict = None):
     try:
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
+
+        # dữ liệu thô gửi cho AI
+        raw_summary = {
+            "symbol": symbol,
+            "lastPrice": price,
+            "change_pct": change_pct,
+            "market_trend": market_trend
+        }
 
         async with aiohttp.ClientSession() as session:
             headers = {
@@ -117,8 +125,16 @@ async def analyze_single_coin(symbol: str):
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời JSON với: side (LONG/SHORT), strength (%), reason."},
-                    {"role": "user", "content": f"Phân tích coin {symbol} trên MEXC Futures và đưa ra tín hiệu giao dịch."}
+                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Luôn trả lời JSON thuần, KHÔNG giải thích thêm."},
+                    {"role": "user", "content": f"""
+Dữ liệu coin {symbol}: {json.dumps(raw_summary, ensure_ascii=False)}.
+Hãy phân tích và trả về JSON đúng mẫu:
+{{
+  "side": "LONG hoặc SHORT",
+  "strength": số %, 
+  "reason": "ngắn gọn lý do"
+}}
+                    """}
                 ]
             }
             async with session.post("https://openrouter.ai/api/v1/chat/completions",
@@ -127,18 +143,19 @@ async def analyze_single_coin(symbol: str):
                 if "choices" not in data:
                     print("[AI ERROR] Không nhận được kết quả hợp lệ:", data)
                     return None
-                ai_text = data["choices"][0]["message"]["content"]
+                ai_text = data["choices"][0]["message"]["content"].strip()
 
                 try:
                     result = json.loads(ai_text)
-                except:
+                except Exception as e:
+                    print(f"[AI ERROR] JSON parse fail: {ai_text}")
                     side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
-                    return {"side": side, "strength": 75, "reason": ai_text}
+                    return {"side": side, "strength": 50, "reason": ai_text}
 
                 return {
                     "side": result.get("side", "LONG"),
-                    "strength": result.get("strength", 75),
-                    "reason": result.get("reason", ai_text)
+                    "strength": result.get("strength", 50),
+                    "reason": result.get("reason", "AI phân tích")
                 }
 
     except Exception as e:
