@@ -67,28 +67,48 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
-    # Test bot
+    # Test bot (giả lập + check API)
     elif text == "🧪 test":
         await update.message.reply_text("🔍 Đang test toàn bộ tính năng...")
+
+        try:
+            # Check MEXC data
+            coins = await get_top_futures(limit=5)
+            if coins:
+                await update.message.reply_text(f"✅ MEXC OK, lấy {len(coins)} coin.")
+            else:
+                await update.message.reply_text("⚠️ Không lấy được dữ liệu từ MEXC.")
+
+            # Check AI
+            if coins:
+                test_symbol = coins[0]["symbol"]
+                trend = await analyze_single_coin(test_symbol)
+                if trend:
+                    await update.message.reply_text(f"🤖 AI OK cho {test_symbol}: {trend}")
+                else:
+                    await update.message.reply_text("⚠️ AI không trả về kết quả.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Lỗi test: {e}")
+
+        # Chạy lại flow hằng ngày
         await job_morning_message()
         await job_trade_signals_notice()
         await job_trade_signals()
         await job_evening_summary()
+
         await update.message.reply_text("✅ Test toàn bộ tính năng hoàn tất!", reply_markup=get_reply_menu())
 
     # Nếu nhập tên coin bất kỳ
     else:
-        all_coins = await get_top_futures(limit=200)  # lấy nhiều coin
+        all_coins = await get_top_futures(limit=200)
         symbols = [c["symbol"] for c in all_coins]
 
         query = text.upper()
         symbol = None
 
-        # Nếu nhập đúng hẳn (vd: BTC → BTC_USDT)
         if f"{query}_USDT" in symbols:
             symbol = f"{query}_USDT"
         else:
-            # Nếu nhập ngắn (vd: pepe → PEPE1000_USDT)
             for s in symbols:
                 if s.startswith(query):
                     symbol = s
@@ -106,7 +126,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⚠️ Không phân tích được cho {symbol}", reply_markup=get_reply_menu())
             return
 
-        entry = trend.get("lastPrice", 0)
+        entry = trend.get("lastPrice", 0) or 1
         entry_price = entry * vnd_rate if vnd_rate else entry
         tp = entry * (1.01 if trend["side"] == "LONG" else 0.99)
         sl = entry * (0.99 if trend["side"] == "LONG" else 1.01)
@@ -120,8 +140,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 Entry: {entry_price:,.2f} {s['currency_mode']}\n"
             f"🎯 TP: {tp_price:,.2f} {s['currency_mode']}\n"
             f"🛡️ SL: {sl_price:,.2f} {s['currency_mode']}\n"
-            f"📊 Độ mạnh: {trend['strength']:.1f}%\n"
-            f"📌 Lý do: {trend['reason']}\n"
+            f"📊 Độ mạnh: {trend.get('strength',75):.1f}%\n"
+            f"📌 Lý do: {trend.get('reason','AI phân tích')}\n"
             f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
         )
         await update.message.reply_text(msg, reply_markup=get_reply_menu())
