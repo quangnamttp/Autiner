@@ -15,7 +15,6 @@ from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
 
-
 # =============================
 # Format giá
 # =============================
@@ -29,7 +28,6 @@ def format_price(value, currency="USD", vnd_rate=None):
     except:
         return str(value)
 
-
 # =============================
 # Notice trước tín hiệu
 # =============================
@@ -42,7 +40,6 @@ async def job_trade_signals_notice(_=None):
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
-
 
 # =============================
 # Tạo tín hiệu
@@ -66,9 +63,8 @@ def create_trade_signal(symbol, side, entry, mode,
         f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
     )
 
-
 # =============================
-# Gửi tín hiệu (5 coin / 30 phút)
+# Gửi tín hiệu (luôn đủ 5)
 # =============================
 async def job_trade_signals(_=None):
     try:
@@ -87,16 +83,31 @@ async def job_trade_signals(_=None):
 
         signals = []
         for coin in all_coins:
-            ai_signal = await analyze_single_coin(coin["symbol"])   # ✅ chỉ truyền symbol
+            ai_signal = await analyze_single_coin(
+                symbol=coin["symbol"],
+                price=coin["lastPrice"],
+                change_pct=coin["change_pct"],
+                market_trend=market_trend
+            )
             if ai_signal:
                 ai_signal["symbol"] = coin["symbol"]
                 ai_signal["price"] = coin["lastPrice"]
                 signals.append(ai_signal)
+            if len(signals) >= 5:
+                break
 
-        signals.sort(key=lambda x: x.get("strength", 0), reverse=True)
-        top5 = signals[:5]
+        # nếu thiếu thì lấp đầy
+        while len(signals) < 5 and all_coins:
+            coin = all_coins[len(signals)]
+            signals.append({
+                "symbol": coin["symbol"],
+                "price": coin["lastPrice"],
+                "side": "LONG",
+                "strength": 70,
+                "reason": "Fallback tín hiệu mặc định"
+            })
 
-        for idx, sig in enumerate(top5):
+        for idx, sig in enumerate(signals[:5]):
             mode = "Scalping" if idx < 3 else "Swing"
             msg = create_trade_signal(
                 sig["symbol"],
@@ -105,7 +116,7 @@ async def job_trade_signals(_=None):
                 mode,
                 currency_mode,
                 vnd_rate,
-                sig.get("strength", 75),
+                sig.get("strength", 70),
                 sig.get("reason", "AI phân tích")
             )
             if idx == 0:
@@ -115,7 +126,6 @@ async def job_trade_signals(_=None):
     except Exception as e:
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
-
 
 # =============================
 # Setup job
