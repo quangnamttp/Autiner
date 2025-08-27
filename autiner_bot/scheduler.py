@@ -87,12 +87,7 @@ async def job_trade_signals(_=None):
 
         signals = []
         for coin in all_coins:
-            ai_signal = await analyze_single_coin(
-                symbol=coin["symbol"],
-                price=coin["lastPrice"],
-                change_pct=coin["change_pct"],
-                market_trend=market_trend
-            )
+            ai_signal = await analyze_single_coin(coin["symbol"])   # ✅ chỉ truyền symbol
             if ai_signal:
                 ai_signal["symbol"] = coin["symbol"]
                 ai_signal["price"] = coin["lastPrice"]
