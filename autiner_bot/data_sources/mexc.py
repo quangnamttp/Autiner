@@ -1,7 +1,7 @@
 import aiohttp
 import traceback
-import os
 import json
+from autiner_bot.settings import S   # ✅ import config chung
 
 MEXC_BASE_URL = "https://contract.mexc.com"
 
@@ -104,24 +104,29 @@ async def analyze_market_trend():
 # =============================
 async def analyze_single_coin(symbol: str):
     try:
-        OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
-        if not OPENROUTER_KEY:
+        if not S.OPENROUTER_API_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
 
         async with aiohttp.ClientSession() as session:
             headers = {
-                "Authorization": f"Bearer {OPENROUTER_KEY}",
+                "Authorization": f"Bearer {S.OPENROUTER_API_KEY}",
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1"),
+                "model": S.OPENROUTER_MODEL,
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời JSON với: side (LONG/SHORT), strength (%), reason."},
-                    {"role": "user", "content": f"Phân tích coin {symbol} trên MEXC Futures và đưa ra tín hiệu giao dịch."}
+                    {
+                        "role": "system",
+                        "content": "Bạn là chuyên gia phân tích crypto. Trả lời JSON với: side (LONG/SHORT), strength (%), reason."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Phân tích coin {symbol} trên MEXC Futures và đưa ra tín hiệu giao dịch."
+                    }
                 ]
             }
-            async with session.post("https://openrouter.ai/api/v1/chat/completions",
+            async with session.post(S.OPENROUTER_API_URL,
                                      headers=headers, data=json.dumps(payload), timeout=30) as resp:
                 data = await resp.json()
 
