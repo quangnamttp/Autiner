@@ -1,4 +1,3 @@
-# autiner_bot/settings.py
 import os
 from dataclasses import dataclass
 
@@ -13,7 +12,11 @@ class Settings:
 
     # AI phân tích tín hiệu (qua OpenRouter)
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
-    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1")
+    
+    # mặc định chọn model free (nếu chưa set trong Render)
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "deepseek-r1t-chimera:free")
+
+    # API endpoint OpenRouter
     OPENROUTER_API_URL: str = os.getenv(
         "OPENROUTER_API_URL",
         "https://openrouter.ai/api/v1/chat/completions"
