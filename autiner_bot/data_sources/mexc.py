@@ -91,7 +91,7 @@ async def analyze_market_trend():
 
 
 # =============================
-# AI phân tích coin (AUTO - JSON sạch, có retry)
+# AI phân tích coin (AUTO - JSON sạch, có retry + log chi tiết)
 # =============================
 async def analyze_coin_auto(symbol: str, price: float, change_pct: float, market_trend: dict):
     OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
@@ -114,12 +114,15 @@ async def analyze_coin_auto(symbol: str, price: float, change_pct: float, market
                 return await resp.json()
 
     try:
-        # Model chính
+        # Thử model chính
         model_main = os.getenv("OPENROUTER_MODEL_AUTO", "meta-llama/llama-3.1-8b-instruct:free")
         data = await call_model(model_main)
         ai_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not ai_text:
+            print(f"[AI AUTO ERROR] Không có content cho {symbol}. Full resp:", data)
+            return None
 
-        # ép parse JSON
+        # Parse JSON
         result = None
         try:
             result = json.loads(ai_text)
@@ -129,26 +132,36 @@ async def analyze_coin_auto(symbol: str, price: float, change_pct: float, market
                 end = ai_text.rfind("}") + 1
                 result = json.loads(ai_text[start:end])
             except:
-                print(f"[AI AUTO ERROR] Parse JSON fail cho {symbol}, text={ai_text}")
+                print(f"[AI AUTO ERROR] Parse JSON fail cho {symbol}, text='{ai_text}'")
 
-        # nếu JSON lỗi, thử model phụ
+        # Nếu lỗi parse → thử model phụ
         if not result:
             print(f"[AI AUTO] Thử lại với model phụ deepseek-chat-v3-0324:free cho {symbol}")
             data2 = await call_model("deepseek-chat-v3-0324:free")
             ai_text2 = data2.get("choices", [{}])[0].get("message", {}).get("content", "")
+            print(f"[AI AUTO DEBUG] Trả về từ model phụ: {ai_text2}")
             try:
                 result = json.loads(ai_text2)
             except:
-                return None
+                try:
+                    start = ai_text2.rfind("{")
+                    end = ai_text2.rfind("}") + 1
+                    result = json.loads(ai_text2[start:end])
+                except:
+                    print(f"[AI AUTO ERROR] Parse JSON fail model phụ cho {symbol}")
+                    return None
 
         strength = max(50, min(100, result.get("strength", 70)))
-        return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI auto")}
+        return {
+            "side": result.get("side", "LONG"),
+            "strength": strength,
+            "reason": result.get("reason", "AI auto")
+        }
 
     except Exception as e:
         print(f"[ERROR] analyze_coin_auto({symbol}): {e}")
         print(traceback.format_exc())
         return None
-
 
 # =============================
 # AI phân tích coin (MANUAL - có phân tích dài dòng)
