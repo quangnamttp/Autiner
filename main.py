@@ -6,7 +6,7 @@ import asyncio
 import threading
 
 from autiner_bot.settings import S
-from autiner_bot import menu, scheduler
+from autiner_bot import menu
 
 # Flask app
 app = Flask(__name__)
