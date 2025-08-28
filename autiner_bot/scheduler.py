@@ -6,7 +6,7 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
     analyze_market_trend,
-    analyze_coin,   # ✅ chỉ 1 AI duy nhất
+    analyze_coin,   # ✅ dùng 1 AI duy nhất
 )
 
 import traceback
@@ -68,7 +68,7 @@ def create_trade_signal(symbol, side, entry, mode,
 
 
 # =============================
-# Gửi tín hiệu (5 coin AI, không fallback)
+# Gửi tín hiệu (5 coin biến động nhất mỗi 30 phút)
 # =============================
 async def job_trade_signals(_=None):
     try:
@@ -98,11 +98,11 @@ async def job_trade_signals(_=None):
                 ai_signal["price"] = coin["lastPrice"]
                 signals.append(ai_signal)
 
-            if len(signals) >= 5:   # ✅ dừng khi đủ 5 coin
+            if len(signals) >= 5:   # ✅ chỉ lấy đủ 5 coin AI
                 break
 
         if not signals:
-            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, "⚠️ AI không phân tích được tín hiệu nào lần này.")
+            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, "⚠️ AI không phân tích được tín hiệu nào.")
             return
 
         for idx, sig in enumerate(signals[:5]):
