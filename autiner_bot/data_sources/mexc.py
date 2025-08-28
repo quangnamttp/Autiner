@@ -6,7 +6,7 @@ import json
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy danh sách coin Futures (lọc giá > 0.01)
+# Lấy danh sách coin Futures (lọc giá > 0.01, chọn biến động mạnh nhất)
 # =============================
 async def get_top_futures(limit: int = 50):
     try:
@@ -25,14 +25,17 @@ async def get_top_futures(limit: int = 50):
                     last_price = float(t.get("lastPrice", 0))
                     if last_price < 0.01:  # bỏ coin rác
                         continue
+                    change_pct = float(t.get("riseFallRate", 0)) * 100
                     coins.append({
                         "symbol": t["symbol"],
                         "lastPrice": last_price,
                         "volume": float(t.get("amount24", 0)),
-                        "change_pct": float(t.get("riseFallRate", 0)) * 100
+                        "change_pct": change_pct,
+                        "abs_change": abs(change_pct)
                     })
 
-                coins.sort(key=lambda x: x["volume"], reverse=True)
+                # Ưu tiên biến động mạnh nhất trước, sau đó tới volume
+                coins.sort(key=lambda x: (x["abs_change"], x["volume"]), reverse=True)
                 return coins[:limit]
     except Exception as e:
         print(f"[ERROR] get_top_futures: {e}")
@@ -44,14 +47,7 @@ async def get_top_futures(limit: int = 50):
 # =============================
 async def get_usdt_vnd_rate() -> float:
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-    payload = {
-        "asset": "USDT",
-        "fiat": "VND",
-        "merchantCheck": False,
-        "page": 1,
-        "rows": 10,
-        "tradeType": "SELL"
-    }
+    payload = {"asset": "USDT","fiat": "VND","merchantCheck": False,"page": 1,"rows": 10,"tradeType": "SELL"}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=15) as resp:
@@ -73,23 +69,19 @@ async def analyze_market_trend():
         coins = await get_top_futures(limit=50)
         if not coins:
             return {"trend": "❓ Không xác định", "long": 50, "short": 50}
-
         long_vol = sum(c["volume"] for c in coins if c["change_pct"] > 0)
         short_vol = sum(c["volume"] for c in coins if c["change_pct"] < 0)
         total = long_vol + short_vol
         if total == 0:
             return {"trend": "⚖️ Sideway", "long": 50, "short": 50}
-
         long_pct = round(long_vol / total * 100, 1)
         short_pct = round(short_vol / total * 100, 1)
-
         if long_pct > short_pct + 5:
             trend = "📈 Xu hướng TĂNG"
         elif short_pct > long_pct + 5:
             trend = "📉 Xu hướng GIẢM"
         else:
             trend = "⚖️ Sideway"
-
         return {"trend": trend, "long": long_pct, "short": short_pct}
     except Exception as e:
         print(f"[ERROR] analyze_market_trend: {e}")
@@ -104,7 +96,6 @@ async def analyze_coin_auto(symbol: str, price: float, change_pct: float, market
         if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
-
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
@@ -121,12 +112,10 @@ async def analyze_coin_auto(symbol: str, price: float, change_pct: float, market
                     print("[AI AUTO ERROR]", data)
                     return None
                 ai_text = data["choices"][0]["message"]["content"]
-
                 try:
                     result = json.loads(ai_text)
                 except:
-                    return None  # auto bắt buộc JSON, không fallback
-
+                    return None  # auto bắt buộc JSON
                 strength = max(50, min(100, result.get("strength", 70)))
                 return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI auto")}
     except Exception as e:
@@ -142,7 +131,6 @@ async def analyze_coin_manual(symbol: str):
         if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
-
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
@@ -159,8 +147,6 @@ async def analyze_coin_manual(symbol: str):
                     print("[AI MANUAL ERROR]", data)
                     return None
                 ai_text = data["choices"][0]["message"]["content"]
-
-                # parse JSON cuối cùng trong phân tích
                 try:
                     start = ai_text.rfind("{")
                     end = ai_text.rfind("}") + 1
@@ -168,7 +154,6 @@ async def analyze_coin_manual(symbol: str):
                 except:
                     side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
                     result = {"side": side, "strength": 70, "reason": ai_text}
-
                 strength = max(50, min(100, result.get("strength", 70)))
                 return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI manual")}
     except Exception as e:
