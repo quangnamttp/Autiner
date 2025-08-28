@@ -5,13 +5,13 @@ from autiner_bot.scheduler import job_trade_signals_notice, job_trade_signals
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
-    analyze_coin,      # ✅ chỉ còn 1 AI duy nhất
-    get_top_futures
+    get_top_futures,
+    analyze_coin,   # ✅ 1 AI duy nhất (Copilot free)
 )
 from autiner_bot.utils.time_utils import get_vietnam_time
 
 
-# ==== Hàm tạo menu động theo trạng thái ====
+# ==== Hàm tạo menu động ====
 def get_reply_menu():
     s = state.get_state()
     auto_btn = "🟢 Auto ON" if not s["is_on"] else "🔴 Auto OFF"
@@ -34,11 +34,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
 
-# ==== Handler cho Reply Keyboard & Coin input ====
+# ==== Handler chính ====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().lower()
 
-    # Bật/Tắt bot
+    # Bật/Tắt Auto
     if text in ["🟢 auto on", "🔴 auto off"]:
         if text == "🟢 auto on":
             state.set_on_off(True)
@@ -48,7 +48,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = "⚙️ Auto tín hiệu: 🔴 OFF"
         await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
-    # Chuyển đổi đơn vị
+    # Chuyển đơn vị USD/VND
     elif text in ["💴 mexc vnd", "💵 mexc usd"]:
         new_mode = "VND" if text == "💴 mexc vnd" else "USD"
         state.set_currency_mode(new_mode)
@@ -57,7 +57,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_reply_menu()
         )
 
-    # Xem trạng thái
+    # Xem trạng thái bot
     elif text == "🔍 trạng thái":
         s = state.get_state()
         msg = (
@@ -67,10 +67,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
-    # Test bot (giả lập + check API + AI)
+    # Test bot
     elif text == "🧪 test":
         await update.message.reply_text("🔍 Đang test toàn bộ tính năng...")
-
         try:
             coins = await get_top_futures(limit=5)
             if coins:
@@ -91,14 +90,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await update.message.reply_text(f"❌ Lỗi test: {e}")
 
-        # chạy thử toàn bộ job trong ngày
         await job_morning_message()
         await job_trade_signals_notice()
         await job_trade_signals()
         await job_evening_summary()
-        await update.message.reply_text("✅ Test toàn bộ tính năng hoàn tất!", reply_markup=get_reply_menu())
+        await update.message.reply_text("✅ Test toàn bộ hoàn tất!", reply_markup=get_reply_menu())
 
-    # Nếu nhập tên coin thủ công
+    # Nếu nhập tên coin bất kỳ để phân tích thủ công
     else:
         all_coins = await get_top_futures(limit=200)
         symbols = [c["symbol"] for c in all_coins]
@@ -119,10 +117,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         s = state.get_state()
         vnd_rate = await get_usdt_vnd_rate() if s["currency_mode"] == "VND" else None
+        coin_data = next((c for c in all_coins if c["symbol"] == symbol), None)
+        if not coin_data:
+            await update.message.reply_text(f"⚠️ Không tìm thấy dữ liệu {symbol}", reply_markup=get_reply_menu())
+            return
+
         trend = await analyze_coin(
             symbol,
-            next(c["lastPrice"] for c in all_coins if c["symbol"] == symbol),
-            next(c["change_pct"] for c in all_coins if c["symbol"] == symbol),
+            coin_data["lastPrice"],
+            coin_data["change_pct"],
             {"trend": "Manual", "long": 50, "short": 50}
         )
 
@@ -130,7 +133,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⚠️ Không phân tích được cho {symbol}", reply_markup=get_reply_menu())
             return
 
-        entry = next(c["lastPrice"] for c in all_coins if c["symbol"] == symbol)
+        entry = coin_data["lastPrice"]
         entry_price = entry * vnd_rate if vnd_rate else entry
         tp = entry * (1.01 if trend["side"] == "LONG" else 0.99)
         sl = entry * (0.99 if trend["side"] == "LONG" else 1.01)
