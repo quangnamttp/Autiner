@@ -45,20 +45,27 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = [c["symbol"] for c in all_coins]
     query = text.upper()
     symbol = None
+
+    # check exact
     if f"{query}_USDT" in symbols:
         symbol = f"{query}_USDT"
+    elif f"{query}USDT" in symbols:
+        symbol = f"{query}USDT"
     else:
+        # fuzzy match: chứa query ở bất kỳ vị trí nào
         for s in symbols:
-            if s.startswith(query):
+            if query in s:
                 symbol = s
                 break
+
     if not symbol:
         await update.message.reply_text(f"⚠️ Không tìm thấy {query} trên MEXC")
         return
 
+    # lấy coin info
     coin = next(c for c in all_coins if c["symbol"] == symbol)
     vnd_rate = await get_usdt_vnd_rate() if state.get_state()["currency_mode"] == "VND" else None
-    trend = await analyze_coin(symbol, coin["lastPrice"], coin["change_pct"], {"trend":"N/A"})
+    trend = await analyze_coin(symbol, coin["lastPrice"], coin["change_pct"], {"trend": "N/A"})
 
     if not trend:
         await update.message.reply_text(f"⚠️ Không phân tích được {symbol}")
@@ -66,10 +73,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     entry = coin["lastPrice"]
     entry_price = entry * vnd_rate if vnd_rate else entry
-    tp = entry * (1.01 if trend["side"]=="LONG" else 0.99)
-    sl = entry * (0.99 if trend["side"]=="LONG" else 1.01)
+    tp = entry * (1.01 if trend["side"] == "LONG" else 0.99)
+    sl = entry * (0.99 if trend["side"] == "LONG" else 1.01)
     tp_price = tp * vnd_rate if vnd_rate else tp
     sl_price = sl * vnd_rate if vnd_rate else sl
+
+    # gọn gàng hơn: chỉ lấy lý do ngắn
+    reason = trend['reason']
+    if len(reason) > 120:  # cắt bớt lý do dài dòng
+        reason = reason[:120] + "..."
 
     msg = (
         f"📈⭐ {symbol.replace('_USDT','/'+state.get_state()['currency_mode'])} — "
@@ -79,7 +91,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎯 TP: {tp_price:,.2f} {state.get_state()['currency_mode']}\n"
         f"🛡️ SL: {sl_price:,.2f} {state.get_state()['currency_mode']}\n"
         f"📊 Độ mạnh: {trend['strength']}%\n"
-        f"📌 Lý do: {trend['reason']}\n"
+        f"📌 Lý do: {reason}\n"
         f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
     )
     await update.message.reply_text(msg, reply_markup=get_reply_menu())
