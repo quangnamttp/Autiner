@@ -23,7 +23,7 @@ async def get_top_futures(limit: int = 50):
                     if not t.get("symbol", "").endswith("_USDT"):
                         continue
                     last_price = float(t.get("lastPrice", 0))
-                    if last_price < 0.01:  # bỏ coin rác
+                    if last_price < 0.01:
                         continue
                     change_pct = float(t.get("riseFallRate", 0)) * 100
                     coins.append({
@@ -41,6 +41,7 @@ async def get_top_futures(limit: int = 50):
         print(f"[ERROR] get_top_futures: {e}")
         print(traceback.format_exc())
         return []
+
 
 # =============================
 # Lấy tỷ giá USDT/VND
@@ -61,8 +62,9 @@ async def get_usdt_vnd_rate() -> float:
         print(f"[ERROR] get_usdt_vnd_rate: {e}")
         return 0
 
+
 # =============================
-# Market trend (daily summary)
+# Market trend
 # =============================
 async def analyze_market_trend():
     try:
@@ -87,35 +89,22 @@ async def analyze_market_trend():
         print(f"[ERROR] analyze_market_trend: {e}")
         return {"trend": "❓ Không xác định", "long": 50, "short": 50}
 
+
 # =============================
-# AI phân tích coin (DeepSeek Free - JSON chuẩn)
+# AI phân tích coin (Copilot free - JSON chuẩn)
 # =============================
-async def analyze_coin(symbol: str, price: float = None, change_pct: float = None, market_trend: dict = None):
+async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
-        # Nếu thiếu dữ liệu thì tự lấy
-        if price is None or change_pct is None:
-            coins = await get_top_futures(limit=200)
-            coin = next((c for c in coins if c["symbol"] == symbol), None)
-            if not coin:
-                print(f"[AI ERROR] Không tìm thấy {symbol} trong get_top_futures")
-                return None
-            price = coin["lastPrice"]
-            change_pct = coin["change_pct"]
-
-        if market_trend is None:
-            market_trend = await analyze_market_trend()
-
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
-
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
-                "model": os.getenv("OPENROUTER_MODEL", "deepseek-chat-v3-0324:free"),
+                "model": os.getenv("OPENROUTER_MODEL", "github/copilot:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là bot giao dịch. Trả lời đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
+                    {"role": "system", "content": "Bạn là bot giao dịch. Luôn trả JSON đúng dạng: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
                     {"role": "user", "content": f"Phân tích {symbol}, giá={price}, biến động={change_pct}%, xu hướng={market_trend}"}
                 ]
             }
@@ -127,20 +116,10 @@ async def analyze_coin(symbol: str, price: float = None, change_pct: float = Non
                     return None
                 ai_text = data["choices"][0]["message"]["content"]
 
-                # Bắt buộc parse JSON
-                try:
-                    result = json.loads(ai_text)
-                except:
-                    print("[AI ERROR] JSON sai:", ai_text)
-                    return None  
-
+                # ép parse JSON
+                result = json.loads(ai_text)
                 strength = max(50, min(100, result.get("strength", 70)))
-                return {
-                    "side": result.get("side", "LONG"),
-                    "strength": strength,
-                    "reason": result.get("reason", "AI phân tích"),
-                    "lastPrice": price
-                }
+                return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI phân tích")}
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
         return None
