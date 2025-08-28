@@ -1,154 +1,85 @@
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from autiner_bot.utils import state
-from autiner_bot.scheduler import job_trade_signals_notice, job_trade_signals
-from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
-from autiner_bot.data_sources.mexc import (
-    get_usdt_vnd_rate,
-    get_top_futures,
-    analyze_coin,   # ✅ 1 AI duy nhất (Copilot free)
-)
+from autiner_bot.data_sources.mexc import get_usdt_vnd_rate, get_top_futures, analyze_coin
 from autiner_bot.utils.time_utils import get_vietnam_time
 
-
-# ==== Hàm tạo menu động ====
+# ==== Tạo menu ====
 def get_reply_menu():
     s = state.get_state()
-    auto_btn = "🟢 Auto ON" if not s["is_on"] else "🔴 Auto OFF"
-    currency_btn = "💵 MEXC USD" if s["currency_mode"] == "VND" else "💴 MEXC VND"
-    keyboard = [
-        ["🔍 Trạng thái", auto_btn],
-        ["🧪 Test", currency_btn]
-    ]
+    currency_btn = "💵 USD Mode" if s["currency_mode"] == "VND" else "💴 VND Mode"
+    keyboard = [["🔍 Trạng thái", currency_btn]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-
-# ==== /start Command ====
+# ==== /start ====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = state.get_state()
     msg = (
-        f"📡 Dữ liệu MEXC: LIVE ✅\n"
-        f"• Đơn vị: {s['currency_mode']}\n"
-        f"• Auto: {'ON' if s['is_on'] else 'OFF'}"
+        f"📡 Bot thủ công: nhập tên coin để phân tích\n"
+        f"• Đơn vị: {s['currency_mode']}"
     )
     await update.message.reply_text(msg, reply_markup=get_reply_menu())
 
-
-# ==== Handler chính ====
+# ==== Xử lý input ====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().lower()
 
-    # Bật/Tắt Auto
-    if text in ["🟢 auto on", "🔴 auto off"]:
-        if text == "🟢 auto on":
-            state.set_on_off(True)
-            msg = "⚙️ Auto tín hiệu: 🟢 ON"
-        else:
-            state.set_on_off(False)
-            msg = "⚙️ Auto tín hiệu: 🔴 OFF"
-        await update.message.reply_text(msg, reply_markup=get_reply_menu())
-
-    # Chuyển đơn vị USD/VND
-    elif text in ["💴 mexc vnd", "💵 mexc usd"]:
-        new_mode = "VND" if text == "💴 mexc vnd" else "USD"
+    # chuyển đơn vị
+    if text in ["💴 vnd mode", "💵 usd mode"]:
+        new_mode = "VND" if text == "💴 vnd mode" else "USD"
         state.set_currency_mode(new_mode)
+        await update.message.reply_text(f"💱 Đã chuyển sang {new_mode}", reply_markup=get_reply_menu())
+        return
+
+    # trạng thái
+    if text == "🔍 trạng thái":
+        s = state.get_state()
         await update.message.reply_text(
-            f"💱 Đã chuyển đơn vị sang: {new_mode}",
+            f"📡 Bot thủ công\n• Đơn vị: {s['currency_mode']}",
             reply_markup=get_reply_menu()
         )
+        return
 
-    # Xem trạng thái bot
-    elif text == "🔍 trạng thái":
-        s = state.get_state()
-        msg = (
-            f"📡 Dữ liệu MEXC: LIVE ✅\n"
-            f"• Đơn vị: {s['currency_mode']}\n"
-            f"• Auto: {'ON' if s['is_on'] else 'OFF'}"
-        )
-        await update.message.reply_text(msg, reply_markup=get_reply_menu())
-
-    # Test bot
-    elif text == "🧪 test":
-        await update.message.reply_text("🔍 Đang test toàn bộ tính năng...")
-        try:
-            coins = await get_top_futures(limit=5)
-            if coins:
-                await update.message.reply_text(f"✅ MEXC OK, lấy {len(coins)} coin.")
-                test_symbol = coins[0]["symbol"]
-                trend = await analyze_coin(
-                    test_symbol,
-                    coins[0]["lastPrice"],
-                    coins[0]["change_pct"],
-                    {"trend": "Test", "long": 50, "short": 50}
-                )
-                if trend:
-                    await update.message.reply_text(f"🤖 AI OK cho {test_symbol}: {trend}")
-                else:
-                    await update.message.reply_text("⚠️ AI không trả về kết quả.")
-            else:
-                await update.message.reply_text("⚠️ Không lấy được dữ liệu từ MEXC.")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Lỗi test: {e}")
-
-        await job_morning_message()
-        await job_trade_signals_notice()
-        await job_trade_signals()
-        await job_evening_summary()
-        await update.message.reply_text("✅ Test toàn bộ hoàn tất!", reply_markup=get_reply_menu())
-
-    # Nếu nhập tên coin bất kỳ để phân tích thủ công
+    # nhập coin bất kỳ
+    all_coins = await get_top_futures(limit=200)
+    symbols = [c["symbol"] for c in all_coins]
+    query = text.upper()
+    symbol = None
+    if f"{query}_USDT" in symbols:
+        symbol = f"{query}_USDT"
     else:
-        all_coins = await get_top_futures(limit=200)
-        symbols = [c["symbol"] for c in all_coins]
-        query = text.upper()
-        symbol = None
+        for s in symbols:
+            if s.startswith(query):
+                symbol = s
+                break
+    if not symbol:
+        await update.message.reply_text(f"⚠️ Không tìm thấy {query} trên MEXC")
+        return
 
-        if f"{query}_USDT" in symbols:
-            symbol = f"{query}_USDT"
-        else:
-            for s in symbols:
-                if s.startswith(query):
-                    symbol = s
-                    break
+    coin = next(c for c in all_coins if c["symbol"] == symbol)
+    vnd_rate = await get_usdt_vnd_rate() if state.get_state()["currency_mode"] == "VND" else None
+    trend = await analyze_coin(symbol, coin["lastPrice"], coin["change_pct"], {"trend":"N/A"})
 
-        if not symbol:
-            await update.message.reply_text(f"⚠️ Coin {query} không tồn tại trên MEXC Futures", reply_markup=get_reply_menu())
-            return
+    if not trend:
+        await update.message.reply_text(f"⚠️ Không phân tích được {symbol}")
+        return
 
-        s = state.get_state()
-        vnd_rate = await get_usdt_vnd_rate() if s["currency_mode"] == "VND" else None
-        coin_data = next((c for c in all_coins if c["symbol"] == symbol), None)
-        if not coin_data:
-            await update.message.reply_text(f"⚠️ Không tìm thấy dữ liệu {symbol}", reply_markup=get_reply_menu())
-            return
+    entry = coin["lastPrice"]
+    entry_price = entry * vnd_rate if vnd_rate else entry
+    tp = entry * (1.01 if trend["side"]=="LONG" else 0.99)
+    sl = entry * (0.99 if trend["side"]=="LONG" else 1.01)
+    tp_price = tp * vnd_rate if vnd_rate else tp
+    sl_price = sl * vnd_rate if vnd_rate else sl
 
-        trend = await analyze_coin(
-            symbol,
-            coin_data["lastPrice"],
-            coin_data["change_pct"],
-            {"trend": "Manual", "long": 50, "short": 50}
-        )
-
-        if not trend:
-            await update.message.reply_text(f"⚠️ Không phân tích được cho {symbol}", reply_markup=get_reply_menu())
-            return
-
-        entry = coin_data["lastPrice"]
-        entry_price = entry * vnd_rate if vnd_rate else entry
-        tp = entry * (1.01 if trend["side"] == "LONG" else 0.99)
-        sl = entry * (0.99 if trend["side"] == "LONG" else 1.01)
-        tp_price = tp * vnd_rate if vnd_rate else tp
-        sl_price = sl * vnd_rate if vnd_rate else sl
-
-        msg = (
-            f"📈 {symbol.replace('_USDT','/'+s['currency_mode'])} — "
-            f"{'🟢 LONG' if trend['side']=='LONG' else '🟥 SHORT'}\n\n"
-            f"🔹 Kiểu vào lệnh: Market\n"
-            f"💰 Entry: {entry_price:,.2f} {s['currency_mode']}\n"
-            f"🎯 TP: {tp_price:,.2f} {s['currency_mode']}\n"
-            f"🛡️ SL: {sl_price:,.2f} {s['currency_mode']}\n"
-            f"📊 Độ mạnh: {trend.get('strength',75):.1f}%\n"
-            f"📌 Lý do: {trend.get('reason','AI phân tích')}\n"
-            f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
-        )
-        await update.message.reply_text(msg, reply_markup=get_reply_menu())
+    msg = (
+        f"📈⭐ {symbol.replace('_USDT','/'+state.get_state()['currency_mode'])} — "
+        f"{'🟢 LONG' if trend['side']=='LONG' else '🟥 SHORT'}\n\n"
+        f"🔹 Kiểu vào lệnh: Market\n"
+        f"💰 Entry: {entry_price:,.2f} {state.get_state()['currency_mode']}\n"
+        f"🎯 TP: {tp_price:,.2f} {state.get_state()['currency_mode']}\n"
+        f"🛡️ SL: {sl_price:,.2f} {state.get_state()['currency_mode']}\n"
+        f"📊 Độ mạnh: {trend['strength']}%\n"
+        f"📌 Lý do: {trend['reason']}\n"
+        f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
+    )
+    await update.message.reply_text(msg, reply_markup=get_reply_menu())
