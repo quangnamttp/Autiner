@@ -88,7 +88,7 @@ async def analyze_market_trend():
         return {"trend": "❓ Không xác định", "long": 50, "short": 50}
 
 # =============================
-# AI phân tích coin (Copilot)
+# AI phân tích coin (Copilot Free - JSON chuẩn)
 # =============================
 async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
@@ -96,38 +96,51 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
         if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
+
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL", "github/copilot-chat:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là bot giao dịch crypto. Luôn trả về đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}. Không giải thích dài dòng."},
+                    {"role": "system", "content": "Bạn là bot giao dịch. Trả lời CHỈ duy nhất JSON hợp lệ: {\"side\":\"LONG/SHORT\",\"strength\": %, \"reason\":\"ngắn gọn\"}. Không thêm text khác."},
                     {"role": "user", "content": f"Phân tích {symbol}, giá={price}, biến động={change_pct}%, xu hướng={market_trend}"}
                 ]
             }
-            async with session.post(
-                os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"),
-                headers=headers, data=json.dumps(payload), timeout=40
-            ) as resp:
+            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
+                                     headers=headers, data=json.dumps(payload), timeout=40) as resp:
                 data = await resp.json()
                 if "choices" not in data:
                     print("[AI ERROR]", data)
                     return None
-                ai_text = data["choices"][0]["message"]["content"]
 
-                # Bắt buộc parse JSON
+                ai_text = data["choices"][0]["message"]["content"].strip()
+
+                # Lọc JSON
                 try:
-                    result = json.loads(ai_text)
-                except:
-                    print("[AI ERROR] JSON sai:", ai_text)
-                    return None  
+                    start = ai_text.find("{")
+                    end = ai_text.rfind("}") + 1
+                    json_str = ai_text[start:end]
+                    result = json.loads(json_str)
+                except Exception as e:
+                    print("[AI ERROR] JSON parse fail:", ai_text, e)
+                    # Fallback tránh mất tín hiệu
+                    return {
+                        "side": "LONG" if "LONG" in ai_text.upper() else "SHORT",
+                        "strength": 60,
+                        "reason": "AI fallback"
+                    }
 
                 strength = max(50, min(100, result.get("strength", 70)))
                 return {
                     "side": result.get("side", "LONG"),
                     "strength": strength,
-                    "reason": result.get("reason", "AI Copilot")
+                    "reason": result.get("reason", "AI phân tích")
                 }
+
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
-        return None
+        return {
+            "side": "LONG",
+            "strength": 60,
+            "reason": "AI exception fallback"
+        }
