@@ -5,7 +5,7 @@ from autiner_bot.scheduler import job_trade_signals_notice, job_trade_signals
 from autiner_bot.jobs.daily_reports import job_morning_message, job_evening_summary
 from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
-    analyze_coin_manual,   # ✅ dùng cho test + thủ công
+    analyze_coin,   # ✅ chỉ còn 1 hàm duy nhất
     get_top_futures
 )
 from autiner_bot.utils.time_utils import get_vietnam_time
@@ -76,7 +76,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if coins:
                 await update.message.reply_text(f"✅ MEXC OK, lấy {len(coins)} coin.")
                 test_symbol = coins[0]["symbol"]
-                trend = await analyze_coin_manual(test_symbol)   # ✅ manual
+                trend = await analyze_coin(test_symbol)   # ✅ dùng analyze_coin
                 if trend:
                     await update.message.reply_text(f"🤖 AI OK cho {test_symbol}: {trend}")
                 else:
@@ -113,7 +113,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         s = state.get_state()
         vnd_rate = await get_usdt_vnd_rate() if s["currency_mode"] == "VND" else None
-        trend = await analyze_coin_manual(symbol)   # ✅ manual
+        trend = await analyze_coin(symbol)   # ✅ dùng analyze_coin
 
         if not trend:
             await update.message.reply_text(f"⚠️ Không phân tích được cho {symbol}", reply_markup=get_reply_menu())
