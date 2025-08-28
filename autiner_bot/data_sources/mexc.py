@@ -5,8 +5,9 @@ import json
 
 MEXC_BASE_URL = "https://contract.mexc.com"
 
+
 # =============================
-# Lấy danh sách coin Futures
+# Lấy danh sách coin Futures (lọc giá > 0.01)
 # =============================
 async def get_top_futures(limit: int = 50):
     try:
@@ -41,7 +42,7 @@ async def get_top_futures(limit: int = 50):
 
 
 # =============================
-# Lấy tỷ giá USDT/VND
+# Lấy tỷ giá USDT/VND (Binance P2P)
 # =============================
 async def get_usdt_vnd_rate() -> float:
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
@@ -100,9 +101,9 @@ async def analyze_market_trend():
 
 
 # =============================
-# AI AUTO (Scheduler)
+# AI AUTO (cho tín hiệu tự động)
 # =============================
-async def analyze_single_coin_auto(symbol: str, price: float, change_pct: float, market_trend: dict):
+async def analyze_coin_auto(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
@@ -115,36 +116,42 @@ async def analyze_single_coin_auto(symbol: str, price: float, change_pct: float,
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": "meta-llama/llama-4-maverick:free",  # AUTO MODEL
+                "model": os.getenv("OPENROUTER_MODEL_AUTO", "meta-llama/llama-4-maverick:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời JSON: {\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"...\"}"},
+                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
                     {"role": "user", "content": f"Phân tích coin {symbol}, giá={price}, biến động={change_pct}%, xu hướng thị trường={market_trend}"}
                 ]
             }
-            async with session.post("https://openrouter.ai/api/v1/chat/completions",
-                                    headers=headers, data=json.dumps(payload), timeout=30) as resp:
+            async with session.post(os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"),
+                                     headers=headers, data=json.dumps(payload), timeout=30) as resp:
                 data = await resp.json()
                 if "choices" not in data:
-                    print("[AI ERROR AUTO] Không nhận được choices:", data)
+                    print("[AI ERROR][AUTO] Không nhận được choices:", data)
                     return None
 
                 ai_text = data["choices"][0]["message"]["content"]
+
                 try:
                     result = json.loads(ai_text)
                 except:
                     side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
                     result = {"side": side, "strength": 70, "reason": ai_text}
 
-                return result
+                return {
+                    "side": result.get("side", "LONG"),
+                    "strength": max(50, min(result.get("strength", 70), 100)),
+                    "reason": result.get("reason", "AI AUTO phân tích"),
+                }
+
     except Exception as e:
-        print(f"[ERROR] analyze_single_coin_auto({symbol}): {e}")
+        print(f"[ERROR] analyze_coin_auto({symbol}): {e}")
         return None
 
 
 # =============================
-# AI MANUAL (Khi gõ coin thủ công)
+# AI MANUAL (dùng khi gõ coin / test)
 # =============================
-async def analyze_single_coin_manual(symbol: str):
+async def analyze_coin_manual(symbol: str):
     try:
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
@@ -157,27 +164,33 @@ async def analyze_single_coin_manual(symbol: str):
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": "deepseek-chat-v3-0324:free",  # MANUAL MODEL
+                "model": os.getenv("OPENROUTER_MODEL_MANUAL", "deepseek-chat-v3-0324:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời JSON: {\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"...\"}"},
+                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
                     {"role": "user", "content": f"Phân tích coin {symbol} trên MEXC Futures và đưa ra tín hiệu giao dịch."}
                 ]
             }
-            async with session.post("https://openrouter.ai/api/v1/chat/completions",
-                                    headers=headers, data=json.dumps(payload), timeout=30) as resp:
+            async with session.post(os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"),
+                                     headers=headers, data=json.dumps(payload), timeout=30) as resp:
                 data = await resp.json()
                 if "choices" not in data:
-                    print("[AI ERROR MANUAL] Không nhận được choices:", data)
+                    print("[AI ERROR][MANUAL] Không nhận được choices:", data)
                     return None
 
                 ai_text = data["choices"][0]["message"]["content"]
+
                 try:
                     result = json.loads(ai_text)
                 except:
                     side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
                     result = {"side": side, "strength": 75, "reason": ai_text}
 
-                return result
+                return {
+                    "side": result.get("side", "LONG"),
+                    "strength": max(50, min(result.get("strength", 75), 100)),
+                    "reason": result.get("reason", "AI MANUAL phân tích"),
+                }
+
     except Exception as e:
-        print(f"[ERROR] analyze_single_coin_manual({symbol}): {e}")
+        print(f"[ERROR] analyze_coin_manual({symbol}): {e}")
         return None
