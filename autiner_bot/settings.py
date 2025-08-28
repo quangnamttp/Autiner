@@ -10,16 +10,9 @@ class Settings:
     # Timezone
     TZ_NAME: str = os.getenv("TZ_NAME", "Asia/Ho_Chi_Minh")
 
-    # AI config (chỉ dùng 1 model duy nhất)
+    # OpenRouter API (AI duy nhất: DeepSeek free)
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
-
-    # Model AI duy nhất cho cả auto & thủ công
-    OPENROUTER_MODEL: str = os.getenv(
-        "OPENROUTER_MODEL",
-        "meta-llama/llama-3.1-8b-instruct:free"  # ✅ free, JSON tốt hơn
-    )
-
-    # API endpoint
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "deepseek-chat-v3-0324:free")
     OPENROUTER_API_URL: str = os.getenv(
         "OPENROUTER_API_URL",
         "https://openrouter.ai/api/v1/chat/completions"
