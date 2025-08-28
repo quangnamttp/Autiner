@@ -2,12 +2,11 @@ import aiohttp
 import traceback
 import os
 import json
-from autiner_bot.settings import S
 
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy danh sách coin Futures (lọc giá > 0.01, ưu tiên biến động mạnh nhất)
+# Lấy danh sách coin Futures (lọc giá > 0.01, chọn biến động mạnh nhất)
 # =============================
 async def get_top_futures(limit: int = 50):
     try:
@@ -35,14 +34,13 @@ async def get_top_futures(limit: int = 50):
                         "abs_change": abs(change_pct)
                     })
 
-                # Ưu tiên biến động mạnh nhất, sau đó tới volume
+                # Ưu tiên biến động mạnh nhất trước, sau đó tới volume
                 coins.sort(key=lambda x: (x["abs_change"], x["volume"]), reverse=True)
                 return coins[:limit]
     except Exception as e:
         print(f"[ERROR] get_top_futures: {e}")
         print(traceback.format_exc())
         return []
-
 
 # =============================
 # Lấy tỷ giá USDT/VND
@@ -62,7 +60,6 @@ async def get_usdt_vnd_rate() -> float:
     except Exception as e:
         print(f"[ERROR] get_usdt_vnd_rate: {e}")
         return 0
-
 
 # =============================
 # Market trend (daily summary)
@@ -90,29 +87,25 @@ async def analyze_market_trend():
         print(f"[ERROR] analyze_market_trend: {e}")
         return {"trend": "❓ Không xác định", "long": 50, "short": 50}
 
-
 # =============================
-# AI phân tích coin (dùng duy nhất 1 model)
+# AI phân tích coin (DeepSeek Free - JSON chuẩn)
 # =============================
 async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
-        if not S.OPENROUTER_API_KEY:
+        OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+        if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
-
         async with aiohttp.ClientSession() as session:
-            headers = {
-                "Authorization": f"Bearer {S.OPENROUTER_API_KEY}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
-                "model": S.OPENROUTER_MODEL,  # ✅ chỉ 1 model duy nhất
+                "model": os.getenv("OPENROUTER_MODEL", "deepseek-chat-v3-0324:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là bot giao dịch. Luôn trả JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
+                    {"role": "system", "content": "Bạn là bot giao dịch. Trả lời đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
                     {"role": "user", "content": f"Phân tích {symbol}, giá={price}, biến động={change_pct}%, xu hướng={market_trend}"}
                 ]
             }
-            async with session.post(S.OPENROUTER_API_URL,
+            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
                                      headers=headers, data=json.dumps(payload), timeout=40) as resp:
                 data = await resp.json()
                 if "choices" not in data:
@@ -120,19 +113,15 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
                     return None
                 ai_text = data["choices"][0]["message"]["content"]
 
-                # Bắt buộc phải parse JSON
+                # Bắt buộc parse JSON
                 try:
                     result = json.loads(ai_text)
                 except:
-                    print("[AI PARSE ERROR]", ai_text)
-                    return None
+                    print("[AI ERROR] JSON sai:", ai_text)
+                    return None  
 
                 strength = max(50, min(100, result.get("strength", 70)))
-                return {
-                    "side": result.get("side", "LONG"),
-                    "strength": strength,
-                    "reason": result.get("reason", "AI phân tích")
-                }
+                return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI phân tích")}
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
         return None
