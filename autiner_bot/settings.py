@@ -1,4 +1,3 @@
-# autiner_bot/settings.py
 import os
 from dataclasses import dataclass
 
@@ -11,16 +10,16 @@ class Settings:
     # Timezone
     TZ_NAME: str = os.getenv("TZ_NAME", "Asia/Ho_Chi_Minh")
 
-    # AI phân tích tín hiệu (qua OpenRouter)
+    # AI config (chỉ dùng 1 model duy nhất)
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 
-    # Model cho AUTO (scheduler)
-    OPENROUTER_MODEL_AUTO: str = os.getenv("OPENROUTER_MODEL_AUTO", "meta-llama/llama-4-maverick:free")
+    # Model AI duy nhất cho cả auto & thủ công
+    OPENROUTER_MODEL: str = os.getenv(
+        "OPENROUTER_MODEL",
+        "meta-llama/llama-3.1-8b-instruct:free"  # ✅ free, JSON tốt hơn
+    )
 
-    # Model cho MANUAL (người dùng gõ coin)
-    OPENROUTER_MODEL_MANUAL: str = os.getenv("OPENROUTER_MODEL_MANUAL", "deepseek-chat-v3-0324:free")
-
-    # API endpoint OpenRouter
+    # API endpoint
     OPENROUTER_API_URL: str = os.getenv(
         "OPENROUTER_API_URL",
         "https://openrouter.ai/api/v1/chat/completions"
