@@ -6,7 +6,7 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
     analyze_market_trend,
-    analyze_coin,   # ✅ chỉ 1 AI duy nhất
+    analyze_coin_auto,   # ✅ auto AI
 )
 
 import traceback
@@ -68,7 +68,7 @@ def create_trade_signal(symbol, side, entry, mode,
 
 
 # =============================
-# Gửi tín hiệu (luôn 5 coin AI, không fallback cứng)
+# Gửi tín hiệu (luôn thử 5 coin hợp lệ từ top 50)
 # =============================
 async def job_trade_signals(_=None):
     try:
@@ -87,7 +87,7 @@ async def job_trade_signals(_=None):
 
         signals = []
         for coin in all_coins:
-            ai_signal = await analyze_coin(
+            ai_signal = await analyze_coin_auto(
                 symbol=coin["symbol"],
                 price=coin["lastPrice"],
                 change_pct=coin["change_pct"],
@@ -98,16 +98,17 @@ async def job_trade_signals(_=None):
                 ai_signal["price"] = coin["lastPrice"]
                 signals.append(ai_signal)
 
-            if len(signals) >= 5:   # ✅ dừng khi đủ 5 tín hiệu
+            if len(signals) >= 5:   # ✅ chỉ dừng khi đủ 5 coin phân tích thành công
                 break
 
-        if not signals:
-            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, "⚠️ Không phân tích được tín hiệu nào.")
-            return
-
+        # Nếu vẫn chưa đủ 5 coin thì báo rõ ràng
         if len(signals) < 5:
-            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, f"⚠️ Chỉ lấy được {len(signals)}/5 tín hiệu.")
+            await bot.send_message(
+                S.TELEGRAM_ALLOWED_USER_ID,
+                f"⚠️ Chỉ phân tích được {len(signals)}/5 tín hiệu. Có coin bị AI bỏ qua."
+            )
 
+        # Gửi tín hiệu
         for idx, sig in enumerate(signals[:5]):
             mode = "Scalping" if idx < 3 else "Swing"
             msg = create_trade_signal(
