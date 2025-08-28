@@ -6,7 +6,7 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
     analyze_market_trend,
-    analyze_coin,   # ✅ dùng 1 AI duy nhất
+    analyze_coin,
 )
 
 import traceback
@@ -14,7 +14,6 @@ import pytz
 from datetime import time
 
 bot = Bot(token=S.TELEGRAM_BOT_TOKEN)
-
 
 # =============================
 # Format giá
@@ -68,7 +67,7 @@ def create_trade_signal(symbol, side, entry, mode,
 
 
 # =============================
-# Gửi tín hiệu (5 coin biến động nhất mỗi 30 phút)
+# Gửi tín hiệu
 # =============================
 async def job_trade_signals(_=None):
     try:
@@ -81,11 +80,8 @@ async def job_trade_signals(_=None):
         market_trend = await analyze_market_trend()
 
         all_coins = await get_top_futures(limit=50)
-        if not all_coins:
-            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, "⚠️ Không lấy được dữ liệu coin.")
-            return
-
         signals = []
+
         for coin in all_coins:
             ai_signal = await analyze_coin(
                 symbol=coin["symbol"],
@@ -98,12 +94,8 @@ async def job_trade_signals(_=None):
                 ai_signal["price"] = coin["lastPrice"]
                 signals.append(ai_signal)
 
-            if len(signals) >= 5:   # ✅ chỉ lấy đủ 5 coin AI
+            if len(signals) >= 5:
                 break
-
-        if not signals:
-            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, "⚠️ AI không phân tích được tín hiệu nào.")
-            return
 
         for idx, sig in enumerate(signals[:5]):
             mode = "Scalping" if idx < 3 else "Swing"
@@ -127,14 +119,12 @@ async def job_trade_signals(_=None):
 
 
 # =============================
-# Setup job (30p 1 lần từ 6h15 - 21h45)
+# Setup job
 # =============================
 def setup_jobs(application):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
-
     for h in range(6, 22):
         for m in [15, 45]:
             application.job_queue.run_daily(job_trade_signals_notice, time=time(h, m-1, 0, tzinfo=tz))
             application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
-
     print("✅ Scheduler đã setup thành công!")
