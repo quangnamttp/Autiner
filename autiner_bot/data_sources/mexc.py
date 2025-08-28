@@ -2,11 +2,12 @@ import aiohttp
 import traceback
 import os
 import json
+from autiner_bot.settings import S
 
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy danh sách coin Futures (lọc giá > 0.01, chọn biến động mạnh nhất)
+# Lấy danh sách coin Futures (lọc giá > 0.01, ưu tiên biến động mạnh nhất)
 # =============================
 async def get_top_futures(limit: int = 50):
     try:
@@ -34,7 +35,7 @@ async def get_top_futures(limit: int = 50):
                         "abs_change": abs(change_pct)
                     })
 
-                # Ưu tiên biến động mạnh nhất trước, sau đó tới volume
+                # Ưu tiên biến động mạnh nhất, sau đó tới volume
                 coins.sort(key=lambda x: (x["abs_change"], x["volume"]), reverse=True)
                 return coins[:limit]
     except Exception as e:
@@ -91,113 +92,47 @@ async def analyze_market_trend():
 
 
 # =============================
-# AI phân tích coin (AUTO - JSON sạch, có retry + log chi tiết)
+# AI phân tích coin (dùng duy nhất 1 model)
 # =============================
-async def analyze_coin_auto(symbol: str, price: float, change_pct: float, market_trend: dict):
-    OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
-    if not OPENROUTER_KEY:
-        print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
-        return None
+async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
+    try:
+        if not S.OPENROUTER_API_KEY:
+            print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
+            return None
 
-    async def call_model(model_name: str, timeout: int = 45):
         async with aiohttp.ClientSession() as session:
-            headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
+            headers = {
+                "Authorization": f"Bearer {S.OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            }
             payload = {
-                "model": model_name,
+                "model": S.OPENROUTER_MODEL,  # ✅ chỉ 1 model duy nhất
                 "messages": [
-                    {"role": "system", "content": "Bạn là bot giao dịch. Trả lời đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
+                    {"role": "system", "content": "Bạn là bot giao dịch. Luôn trả JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
                     {"role": "user", "content": f"Phân tích {symbol}, giá={price}, biến động={change_pct}%, xu hướng={market_trend}"}
                 ]
             }
-            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
-                                     headers=headers, data=json.dumps(payload), timeout=timeout) as resp:
-                return await resp.json()
-
-    try:
-        # Thử model chính
-        model_main = os.getenv("OPENROUTER_MODEL_AUTO", "meta-llama/llama-3.1-8b-instruct:free")
-        data = await call_model(model_main)
-        ai_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if not ai_text:
-            print(f"[AI AUTO ERROR] Không có content cho {symbol}. Full resp:", data)
-            return None
-
-        # Parse JSON
-        result = None
-        try:
-            result = json.loads(ai_text)
-        except:
-            try:
-                start = ai_text.rfind("{")
-                end = ai_text.rfind("}") + 1
-                result = json.loads(ai_text[start:end])
-            except:
-                print(f"[AI AUTO ERROR] Parse JSON fail cho {symbol}, text='{ai_text}'")
-
-        # Nếu lỗi parse → thử model phụ
-        if not result:
-            print(f"[AI AUTO] Thử lại với model phụ deepseek-chat-v3-0324:free cho {symbol}")
-            data2 = await call_model("deepseek-chat-v3-0324:free")
-            ai_text2 = data2.get("choices", [{}])[0].get("message", {}).get("content", "")
-            print(f"[AI AUTO DEBUG] Trả về từ model phụ: {ai_text2}")
-            try:
-                result = json.loads(ai_text2)
-            except:
-                try:
-                    start = ai_text2.rfind("{")
-                    end = ai_text2.rfind("}") + 1
-                    result = json.loads(ai_text2[start:end])
-                except:
-                    print(f"[AI AUTO ERROR] Parse JSON fail model phụ cho {symbol}")
-                    return None
-
-        strength = max(50, min(100, result.get("strength", 70)))
-        return {
-            "side": result.get("side", "LONG"),
-            "strength": strength,
-            "reason": result.get("reason", "AI auto")
-        }
-
-    except Exception as e:
-        print(f"[ERROR] analyze_coin_auto({symbol}): {e}")
-        print(traceback.format_exc())
-        return None
-
-# =============================
-# AI phân tích coin (MANUAL - có phân tích dài dòng)
-# =============================
-async def analyze_coin_manual(symbol: str):
-    OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
-    if not OPENROUTER_KEY:
-        print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
-        return None
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
-            payload = {
-                "model": os.getenv("OPENROUTER_MODEL_MANUAL", "deepseek-chat-v3-0324:free"),
-                "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Phân tích chi tiết coin. Cuối cùng luôn trả JSON chuẩn: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
-                    {"role": "user", "content": f"Phân tích chi tiết coin {symbol} trên MEXC Futures"}
-                ]
-            }
-            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
-                                     headers=headers, data=json.dumps(payload), timeout=45) as resp:
+            async with session.post(S.OPENROUTER_API_URL,
+                                     headers=headers, data=json.dumps(payload), timeout=40) as resp:
                 data = await resp.json()
                 if "choices" not in data:
-                    print("[AI MANUAL ERROR]", data)
+                    print("[AI ERROR]", data)
                     return None
                 ai_text = data["choices"][0]["message"]["content"]
+
+                # Bắt buộc phải parse JSON
                 try:
-                    start = ai_text.rfind("{")
-                    end = ai_text.rfind("}") + 1
-                    result = json.loads(ai_text[start:end])
+                    result = json.loads(ai_text)
                 except:
-                    side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
-                    result = {"side": side, "strength": 70, "reason": ai_text}
+                    print("[AI PARSE ERROR]", ai_text)
+                    return None
+
                 strength = max(50, min(100, result.get("strength", 70)))
-                return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI manual")}
+                return {
+                    "side": result.get("side", "LONG"),
+                    "strength": strength,
+                    "reason": result.get("reason", "AI phân tích")
+                }
     except Exception as e:
-        print(f"[ERROR] analyze_coin_manual({symbol}): {e}")
+        print(f"[ERROR] analyze_coin({symbol}): {e}")
         return None
