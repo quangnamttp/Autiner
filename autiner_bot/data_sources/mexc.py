@@ -23,7 +23,7 @@ async def get_top_futures(limit: int = 50):
                     if not t.get("symbol", "").endswith("_USDT"):
                         continue
                     last_price = float(t.get("lastPrice", 0))
-                    if last_price < 0.01:
+                    if last_price < 0.01:  # bỏ coin rác
                         continue
                     change_pct = float(t.get("riseFallRate", 0)) * 100
                     coins.append({
@@ -41,7 +41,6 @@ async def get_top_futures(limit: int = 50):
         print(f"[ERROR] get_top_futures: {e}")
         print(traceback.format_exc())
         return []
-
 
 # =============================
 # Lấy tỷ giá USDT/VND
@@ -62,9 +61,8 @@ async def get_usdt_vnd_rate() -> float:
         print(f"[ERROR] get_usdt_vnd_rate: {e}")
         return 0
 
-
 # =============================
-# Market trend
+# Market trend (daily summary)
 # =============================
 async def analyze_market_trend():
     try:
@@ -89,9 +87,8 @@ async def analyze_market_trend():
         print(f"[ERROR] analyze_market_trend: {e}")
         return {"trend": "❓ Không xác định", "long": 50, "short": 50}
 
-
 # =============================
-# AI phân tích coin (Copilot free - JSON chuẩn)
+# AI phân tích coin (Copilot)
 # =============================
 async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
@@ -102,24 +99,35 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
-                "model": os.getenv("OPENROUTER_MODEL", "github/copilot:free"),
+                "model": os.getenv("OPENROUTER_MODEL", "github/copilot-chat:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là bot giao dịch. Luôn trả JSON đúng dạng: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
+                    {"role": "system", "content": "Bạn là bot giao dịch crypto. Luôn trả về đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}. Không giải thích dài dòng."},
                     {"role": "user", "content": f"Phân tích {symbol}, giá={price}, biến động={change_pct}%, xu hướng={market_trend}"}
                 ]
             }
-            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
-                                     headers=headers, data=json.dumps(payload), timeout=40) as resp:
+            async with session.post(
+                os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"),
+                headers=headers, data=json.dumps(payload), timeout=40
+            ) as resp:
                 data = await resp.json()
                 if "choices" not in data:
                     print("[AI ERROR]", data)
                     return None
                 ai_text = data["choices"][0]["message"]["content"]
 
-                # ép parse JSON
-                result = json.loads(ai_text)
+                # Bắt buộc parse JSON
+                try:
+                    result = json.loads(ai_text)
+                except:
+                    print("[AI ERROR] JSON sai:", ai_text)
+                    return None  
+
                 strength = max(50, min(100, result.get("strength", 70)))
-                return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI phân tích")}
+                return {
+                    "side": result.get("side", "LONG"),
+                    "strength": strength,
+                    "reason": result.get("reason", "AI Copilot")
+                }
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
         return None
