@@ -90,12 +90,26 @@ async def analyze_market_trend():
 # =============================
 # AI phân tích coin (DeepSeek Free - JSON chuẩn)
 # =============================
-async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
+async def analyze_coin(symbol: str, price: float = None, change_pct: float = None, market_trend: dict = None):
     try:
+        # Nếu thiếu dữ liệu thì tự lấy
+        if price is None or change_pct is None:
+            coins = await get_top_futures(limit=200)
+            coin = next((c for c in coins if c["symbol"] == symbol), None)
+            if not coin:
+                print(f"[AI ERROR] Không tìm thấy {symbol} trong get_top_futures")
+                return None
+            price = coin["lastPrice"]
+            change_pct = coin["change_pct"]
+
+        if market_trend is None:
+            market_trend = await analyze_market_trend()
+
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
+
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
@@ -121,7 +135,12 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
                     return None  
 
                 strength = max(50, min(100, result.get("strength", 70)))
-                return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI phân tích")}
+                return {
+                    "side": result.get("side", "LONG"),
+                    "strength": strength,
+                    "reason": result.get("reason", "AI phân tích"),
+                    "lastPrice": price
+                }
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
         return None
