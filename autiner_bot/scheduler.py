@@ -6,7 +6,7 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
     analyze_market_trend,
-    analyze_coin,
+    analyze_coin,   # ✅ chỉ dùng 1 AI duy nhất
 )
 
 import traceback
@@ -28,7 +28,6 @@ def format_price(value, currency="USD", vnd_rate=None):
     except:
         return str(value)
 
-
 # =============================
 # Notice trước tín hiệu
 # =============================
@@ -41,7 +40,6 @@ async def job_trade_signals_notice(_=None):
         await bot.send_message(chat_id=S.TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         print(f"[ERROR] job_trade_signals_notice: {e}")
-
 
 # =============================
 # Tạo tín hiệu
@@ -65,9 +63,8 @@ def create_trade_signal(symbol, side, entry, mode,
         f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
     )
 
-
 # =============================
-# Gửi tín hiệu
+# Gửi tín hiệu (5 coin biến động mạnh nhất)
 # =============================
 async def job_trade_signals(_=None):
     try:
@@ -80,8 +77,11 @@ async def job_trade_signals(_=None):
         market_trend = await analyze_market_trend()
 
         all_coins = await get_top_futures(limit=50)
-        signals = []
+        if not all_coins:
+            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, "⚠️ Không lấy được dữ liệu coin.")
+            return
 
+        signals = []
         for coin in all_coins:
             ai_signal = await analyze_coin(
                 symbol=coin["symbol"],
@@ -93,9 +93,15 @@ async def job_trade_signals(_=None):
                 ai_signal["symbol"] = coin["symbol"]
                 ai_signal["price"] = coin["lastPrice"]
                 signals.append(ai_signal)
-
             if len(signals) >= 5:
                 break
+
+        if not signals:
+            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, "⚠️ Không phân tích được tín hiệu nào lần này.")
+            return
+
+        if len(signals) < 5:
+            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, f"⚠️ Chỉ phân tích được {len(signals)}/5 tín hiệu.")
 
         for idx, sig in enumerate(signals[:5]):
             mode = "Scalping" if idx < 3 else "Swing"
@@ -107,7 +113,7 @@ async def job_trade_signals(_=None):
                 currency_mode,
                 vnd_rate,
                 sig.get("strength", 70),
-                sig.get("reason", "AI phân tích")
+                sig.get("reason", "AI Copilot")
             )
             if idx == 0:
                 msg = msg.replace("📈", "📈⭐", 1)
@@ -117,14 +123,15 @@ async def job_trade_signals(_=None):
         print(f"[ERROR] job_trade_signals: {e}")
         print(traceback.format_exc())
 
-
 # =============================
-# Setup job
+# Setup job (30p 1 lần từ 6h15 - 21h45)
 # =============================
 def setup_jobs(application):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
+
     for h in range(6, 22):
         for m in [15, 45]:
             application.job_queue.run_daily(job_trade_signals_notice, time=time(h, m-1, 0, tzinfo=tz))
             application.job_queue.run_daily(job_trade_signals, time=time(h, m, 0, tzinfo=tz))
+
     print("✅ Scheduler đã setup thành công!")
