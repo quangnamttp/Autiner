@@ -5,7 +5,6 @@ import json
 
 MEXC_BASE_URL = "https://contract.mexc.com"
 
-
 # =============================
 # Lấy danh sách coin Futures (lọc giá > 0.01)
 # =============================
@@ -17,8 +16,8 @@ async def get_top_futures(limit: int = 50):
                 data = await resp.json()
                 if not data or "data" not in data:
                     return []
-
                 tickers = data["data"]
+
                 coins = []
                 for t in tickers:
                     if not t.get("symbol", "").endswith("_USDT"):
@@ -40,9 +39,8 @@ async def get_top_futures(limit: int = 50):
         print(traceback.format_exc())
         return []
 
-
 # =============================
-# Lấy tỷ giá USDT/VND (Binance P2P)
+# Lấy tỷ giá USDT/VND
 # =============================
 async def get_usdt_vnd_rate() -> float:
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
@@ -67,7 +65,6 @@ async def get_usdt_vnd_rate() -> float:
         print(f"[ERROR] get_usdt_vnd_rate: {e}")
         return 0
 
-
 # =============================
 # Market trend (daily summary)
 # =============================
@@ -80,7 +77,6 @@ async def analyze_market_trend():
         long_vol = sum(c["volume"] for c in coins if c["change_pct"] > 0)
         short_vol = sum(c["volume"] for c in coins if c["change_pct"] < 0)
         total = long_vol + short_vol
-
         if total == 0:
             return {"trend": "⚖️ Sideway", "long": 50, "short": 50}
 
@@ -99,98 +95,82 @@ async def analyze_market_trend():
         print(f"[ERROR] analyze_market_trend: {e}")
         return {"trend": "❓ Không xác định", "long": 50, "short": 50}
 
-
 # =============================
-# AI AUTO (cho tín hiệu tự động)
+# AI phân tích coin (AUTO - JSON sạch)
 # =============================
 async def analyze_coin_auto(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
-            print("[AI ERROR] Chưa có OPENROUTER_API_KEY (AUTO)")
+            print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
 
         async with aiohttp.ClientSession() as session:
-            headers = {
-                "Authorization": f"Bearer {OPENROUTER_KEY}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
-                "model": os.getenv("OPENROUTER_MODEL_AUTO", "meta-llama/llama-4-maverick:free"),
+                "model": os.getenv("OPENROUTER_MODEL_AUTO", "meta-llama/llama-3.1-8b-instruct:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
-                    {"role": "user", "content": f"Phân tích coin {symbol}, giá={price}, biến động={change_pct}%, xu hướng thị trường={market_trend}"}
+                    {"role": "system", "content": "Bạn là bot giao dịch. Trả lời đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
+                    {"role": "user", "content": f"Phân tích {symbol}, giá={price}, biến động={change_pct}%, xu hướng={market_trend}"}
                 ]
             }
-            async with session.post(os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"),
+            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
                                      headers=headers, data=json.dumps(payload), timeout=30) as resp:
                 data = await resp.json()
                 if "choices" not in data:
-                    print("[AI ERROR][AUTO] Không nhận được choices:", data)
+                    print("[AI AUTO ERROR]", data)
                     return None
-
                 ai_text = data["choices"][0]["message"]["content"]
 
                 try:
                     result = json.loads(ai_text)
                 except:
-                    side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
-                    result = {"side": side, "strength": 70, "reason": ai_text}
+                    return None  # auto bắt buộc JSON, không fallback
 
-                return {
-                    "side": result.get("side", "LONG"),
-                    "strength": max(50, min(result.get("strength", 70), 100)),
-                    "reason": result.get("reason", "AI AUTO phân tích"),
-                }
-
+                strength = max(50, min(100, result.get("strength", 70)))
+                return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI auto")}
     except Exception as e:
         print(f"[ERROR] analyze_coin_auto({symbol}): {e}")
         return None
 
-
 # =============================
-# AI MANUAL (dùng khi gõ coin / test)
+# AI phân tích coin (MANUAL - có phân tích dài dòng)
 # =============================
 async def analyze_coin_manual(symbol: str):
     try:
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
-            print("[AI ERROR] Chưa có OPENROUTER_API_KEY (MANUAL)")
+            print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
 
         async with aiohttp.ClientSession() as session:
-            headers = {
-                "Authorization": f"Bearer {OPENROUTER_KEY}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL_MANUAL", "deepseek-chat-v3-0324:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời đúng JSON: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
-                    {"role": "user", "content": f"Phân tích coin {symbol} trên MEXC Futures và đưa ra tín hiệu giao dịch."}
+                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Phân tích chi tiết coin. Cuối cùng luôn trả JSON chuẩn: {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
+                    {"role": "user", "content": f"Phân tích chi tiết coin {symbol} trên MEXC Futures"}
                 ]
             }
-            async with session.post(os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"),
-                                     headers=headers, data=json.dumps(payload), timeout=30) as resp:
+            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
+                                     headers=headers, data=json.dumps(payload), timeout=45) as resp:
                 data = await resp.json()
                 if "choices" not in data:
-                    print("[AI ERROR][MANUAL] Không nhận được choices:", data)
+                    print("[AI MANUAL ERROR]", data)
                     return None
-
                 ai_text = data["choices"][0]["message"]["content"]
 
+                # parse JSON cuối cùng trong phân tích
                 try:
-                    result = json.loads(ai_text)
+                    start = ai_text.rfind("{")
+                    end = ai_text.rfind("}") + 1
+                    result = json.loads(ai_text[start:end])
                 except:
                     side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
-                    result = {"side": side, "strength": 75, "reason": ai_text}
+                    result = {"side": side, "strength": 70, "reason": ai_text}
 
-                return {
-                    "side": result.get("side", "LONG"),
-                    "strength": max(50, min(result.get("strength", 75), 100)),
-                    "reason": result.get("reason", "AI MANUAL phân tích"),
-                }
-
+                strength = max(50, min(100, result.get("strength", 70)))
+                return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI manual")}
     except Exception as e:
         print(f"[ERROR] analyze_coin_manual({symbol}): {e}")
         return None
