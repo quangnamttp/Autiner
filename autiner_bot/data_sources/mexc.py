@@ -1,10 +1,9 @@
 import aiohttp
+import traceback
 import os
 import json
-import traceback
 
 MEXC_BASE_URL = "https://contract.mexc.com"
-
 
 # =============================
 # Lấy danh sách coin Futures
@@ -101,35 +100,32 @@ async def analyze_market_trend():
 
 
 # =============================
-# AI phân tích coin (AUTO - dùng cho scheduler)
+# AI AUTO (Scheduler)
 # =============================
-async def analyze_coin_auto(symbol: str, price: float, change_pct: float, market_trend: dict):
+async def analyze_single_coin_auto(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
-        key = os.getenv("OPENROUTER_API_KEY", "")
-        if not key:
-            print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
+        OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+        if not OPENROUTER_KEY:
+            print("[AI ERROR] Chưa có OPENROUTER_API_KEY (AUTO)")
             return None
-
-        model = os.getenv("OPENROUTER_MODEL_AUTO", "deepseek-r1t-chimera:free")
-        url = os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions")
 
         async with aiohttp.ClientSession() as session:
             headers = {
-                "Authorization": f"Bearer {key}",
+                "Authorization": f"Bearer {OPENROUTER_KEY}",
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": model,
+                "model": "meta-llama/llama-4-maverick:free",  # AUTO MODEL
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời JSON {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
+                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời JSON: {\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"...\"}"},
                     {"role": "user", "content": f"Phân tích coin {symbol}, giá={price}, biến động={change_pct}%, xu hướng thị trường={market_trend}"}
                 ]
             }
-            async with session.post(url, headers=headers, data=json.dumps(payload), timeout=30) as resp:
+            async with session.post("https://openrouter.ai/api/v1/chat/completions",
+                                    headers=headers, data=json.dumps(payload), timeout=30) as resp:
                 data = await resp.json()
-
                 if "choices" not in data:
-                    print("[AI ERROR AUTO]", data)
+                    print("[AI ERROR AUTO] Không nhận được choices:", data)
                     return None
 
                 ai_text = data["choices"][0]["message"]["content"]
@@ -141,40 +137,37 @@ async def analyze_coin_auto(symbol: str, price: float, change_pct: float, market
 
                 return result
     except Exception as e:
-        print(f"[ERROR] analyze_coin_auto({symbol}): {e}")
+        print(f"[ERROR] analyze_single_coin_auto({symbol}): {e}")
         return None
 
 
 # =============================
-# AI phân tích coin (MANUAL - dùng khi gõ coin)
+# AI MANUAL (Khi gõ coin thủ công)
 # =============================
-async def analyze_coin_manual(symbol: str):
+async def analyze_single_coin_manual(symbol: str):
     try:
-        key = os.getenv("OPENROUTER_API_KEY", "")
-        if not key:
-            print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
+        OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+        if not OPENROUTER_KEY:
+            print("[AI ERROR] Chưa có OPENROUTER_API_KEY (MANUAL)")
             return None
-
-        model = os.getenv("OPENROUTER_MODEL_MANUAL", "deepseek-chat-v3-0324:free")
-        url = os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions")
 
         async with aiohttp.ClientSession() as session:
             headers = {
-                "Authorization": f"Bearer {key}",
+                "Authorization": f"Bearer {OPENROUTER_KEY}",
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": model,
+                "model": "deepseek-chat-v3-0324:free",  # MANUAL MODEL
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia crypto. Trả lời JSON {\"side\": \"LONG/SHORT\", \"strength\": %, \"reason\": \"...\"}"},
-                    {"role": "user", "content": f"Phân tích thủ công coin {symbol} trên MEXC Futures và đưa ra tín hiệu."}
+                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Trả lời JSON: {\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"...\"}"},
+                    {"role": "user", "content": f"Phân tích coin {symbol} trên MEXC Futures và đưa ra tín hiệu giao dịch."}
                 ]
             }
-            async with session.post(url, headers=headers, data=json.dumps(payload), timeout=30) as resp:
+            async with session.post("https://openrouter.ai/api/v1/chat/completions",
+                                    headers=headers, data=json.dumps(payload), timeout=30) as resp:
                 data = await resp.json()
-
                 if "choices" not in data:
-                    print("[AI ERROR MANUAL]", data)
+                    print("[AI ERROR MANUAL] Không nhận được choices:", data)
                     return None
 
                 ai_text = data["choices"][0]["message"]["content"]
@@ -182,9 +175,9 @@ async def analyze_coin_manual(symbol: str):
                     result = json.loads(ai_text)
                 except:
                     side = "LONG" if "LONG" in ai_text.upper() else "SHORT"
-                    result = {"side": side, "strength": 70, "reason": ai_text}
+                    result = {"side": side, "strength": 75, "reason": ai_text}
 
                 return result
     except Exception as e:
-        print(f"[ERROR] analyze_coin_manual({symbol}): {e}")
+        print(f"[ERROR] analyze_single_coin_manual({symbol}): {e}")
         return None
