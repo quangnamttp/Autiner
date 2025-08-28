@@ -6,7 +6,7 @@ from autiner_bot.data_sources.mexc import (
     get_usdt_vnd_rate,
     get_top_futures,
     analyze_market_trend,
-    analyze_coin_auto,   # ✅ dùng auto AI
+    analyze_coin_auto,   # ✅ auto AI
 )
 
 import traceback
@@ -68,7 +68,7 @@ def create_trade_signal(symbol, side, entry, mode,
 
 
 # =============================
-# Gửi tín hiệu (luôn 5 coin AI, không fallback)
+# Gửi tín hiệu (luôn thử 5 coin, không fallback cứng)
 # =============================
 async def job_trade_signals(_=None):
     try:
@@ -98,12 +98,16 @@ async def job_trade_signals(_=None):
                 ai_signal["price"] = coin["lastPrice"]
                 signals.append(ai_signal)
 
-            if len(signals) >= 5:   # ✅ chỉ chọn đủ 5 coin AI thật
+            if len(signals) >= 5:   # ✅ dừng khi đủ 5
                 break
 
+        # Không im lặng: gửi cảnh báo nếu ít hơn 5
         if not signals:
-            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, "⚠️ AI không phân tích được tín hiệu nào.")
+            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, "⚠️ Không phân tích được tín hiệu nào lần này.")
             return
+
+        if len(signals) < 5:
+            await bot.send_message(S.TELEGRAM_ALLOWED_USER_ID, f"⚠️ Chỉ phân tích được {len(signals)}/5 tín hiệu.")
 
         for idx, sig in enumerate(signals[:5]):
             mode = "Scalping" if idx < 3 else "Swing"
@@ -127,7 +131,7 @@ async def job_trade_signals(_=None):
 
 
 # =============================
-# Setup job
+# Setup job (30p 1 lần từ 6h15 - 21h45)
 # =============================
 def setup_jobs(application):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
