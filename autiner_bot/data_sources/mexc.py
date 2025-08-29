@@ -7,7 +7,7 @@ import numpy as np
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy toàn bộ coin Futures
+# Lấy toàn bộ coin Futures (không lọc)
 # =============================
 async def get_all_futures():
     try:
@@ -28,7 +28,14 @@ async def get_all_futures():
 # =============================
 async def get_usdt_vnd_rate() -> float:
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-    payload = {"asset": "USDT","fiat": "VND","merchantCheck": False,"page": 1,"rows": 10,"tradeType": "SELL"}
+    payload = {
+        "asset": "USDT",
+        "fiat": "VND",
+        "merchantCheck": False,
+        "page": 1,
+        "rows": 10,
+        "tradeType": "SELL"
+    }
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=15) as resp:
@@ -63,6 +70,7 @@ def calculate_indicators(klines):
     try:
         closes = np.array([float(k[4]) for k in klines], dtype=float)
 
+        # EMA
         ema20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
         ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else closes[-1]
 
@@ -105,29 +113,32 @@ def calculate_indicators(klines):
         return {}
 
 # =============================
-# AI phân tích coin (KHÔNG fallback)
+# AI phân tích coin (ép JSON)
 # =============================
 async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
         klines = await get_kline(symbol, "Min15", 100)
         indicators = calculate_indicators(klines) if klines else {}
-
         if not indicators:
-            indicators = {"RSI": "N/A", "MACD": "N/A", "EMA20": "N/A", "EMA50": "N/A", "Bollinger": "N/A"}
+            indicators = {"RSI": 50, "MACD": "neutral", "EMA20": price, "EMA50": price, "Bollinger": "không xác định"}
 
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
 
-        # Feed cho AI
         msg = (
             f"Phân tích coin {symbol}:\n"
             f"- Giá hiện tại: {price}\n"
             f"- Biến động 24h: {change_pct}%\n"
             f"- Xu hướng thị trường: {market_trend}\n"
-            f"- Chỉ báo kỹ thuật: {indicators}\n\n"
-            f"Hãy đưa ra khuyến nghị LONG hoặc SHORT."
+            f"- RSI(14): {indicators['RSI']}\n"
+            f"- MACD: {indicators['MACD']}\n"
+            f"- EMA20: {indicators['EMA20']}\n"
+            f"- EMA50: {indicators['EMA50']}\n"
+            f"- Bollinger: {indicators['Bollinger']}\n\n"
+            f"👉 Chỉ trả về JSON hợp lệ dạng: "
+            f"{{\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"ngắn gọn\"}}"
         )
 
         async with aiohttp.ClientSession() as session:
@@ -135,29 +146,30 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia crypto. Luôn trả JSON: {\"side\":\"LONG/SHORT\",\"strength\": %, \"reason\":\"ngắn gọn\"}"},
+                    {"role": "system", "content": "Bạn là chuyên gia crypto. Luôn trả JSON hợp lệ."},
                     {"role": "user", "content": msg}
                 ]
             }
-            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
-                                     headers=headers, data=json.dumps(payload), timeout=50) as resp:
+            async with session.post(
+                os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
+                headers=headers, data=json.dumps(payload), timeout=50
+            ) as resp:
                 data = await resp.json()
                 if "choices" not in data:
-                    print("[AI ERROR] Không có choices:", data)
+                    print("[AI ERROR]", data)
                     return None
 
-                ai_text = data["choices"][0]["message"]["content"]
-
+                ai_text = data["choices"][0]["message"]["content"].strip()
                 try:
                     result = json.loads(ai_text)
                     strength = max(50, min(100, result.get("strength", 70)))
                     return {
                         "side": result.get("side", "LONG"),
                         "strength": strength,
-                        "reason": result.get("reason", "AI phân tích từ chỉ báo")
+                        "reason": result.get("reason", "AI phân tích")
                     }
                 except Exception as e:
-                    print("[AI ERROR] JSON parse fail:", ai_text)
+                    print("[AI JSON ERROR]", ai_text, e)
                     return None
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
