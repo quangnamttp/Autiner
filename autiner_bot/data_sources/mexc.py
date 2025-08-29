@@ -17,7 +17,19 @@ async def get_all_futures():
                 data = await resp.json()
                 if not data or "data" not in data:
                     return []
-                return data["data"]
+
+                coins = []
+                for t in data["data"]:
+                    sym = t.get("symbol", "").upper()
+                    if "USDT" not in sym:  # chỉ lấy cặp USDT
+                        continue
+                    coins.append({
+                        "symbol": sym,
+                        "lastPrice": float(t.get("lastPrice", 0)),
+                        "volume": float(t.get("amount24", 0)),
+                        "change_pct": float(t.get("riseFallRate", 0)) * 100
+                    })
+                return coins
     except Exception as e:
         print(f"[ERROR] get_all_futures: {e}")
         print(traceback.format_exc())
@@ -61,7 +73,7 @@ async def get_kline(symbol: str, interval="Min15", limit=100):
 # =============================
 def calculate_indicators(klines):
     try:
-        closes = np.array([float(k[4]) for k in klines], dtype=float)  # close price
+        closes = np.array([float(k[4]) for k in klines], dtype=float)  # giá close
 
         # EMA
         ema20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
@@ -74,7 +86,7 @@ def calculate_indicators(klines):
         rs = (ups / downs) if downs != 0 else 0
         rsi = 100 - (100 / (1 + rs)) if rs != 0 else 50
 
-        # MACD (12,26,9)
+        # MACD (12,26)
         ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else closes[-1]
         ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else closes[-1]
         macd = ema12 - ema26
@@ -106,11 +118,11 @@ def calculate_indicators(klines):
         return {}
 
 # =============================
-# AI phân tích coin
+# AI phân tích coin (không fallback)
 # =============================
 async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
-        # Lấy dữ liệu kline + chỉ báo
+        # lấy kline + chỉ báo
         klines = await get_kline(symbol, "Min15", 100)
         indicators = calculate_indicators(klines) if klines else {}
 
@@ -119,9 +131,18 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
 
+        # prompt cho AI
         msg = (
-            f"Phân tích {symbol}, giá={price}, biến động={change_pct}%, xu hướng={market_trend}.\n"
-            f"Chỉ báo: {indicators}"
+            f"Phân tích {symbol}:\n"
+            f"- Giá hiện tại: {price}\n"
+            f"- Biến động 24h: {change_pct:.2f}%\n"
+            f"- Xu hướng thị trường: {market_trend}\n"
+            f"- RSI(14): {indicators.get('RSI','N/A')}\n"
+            f"- MACD: {indicators.get('MACD','N/A')}\n"
+            f"- EMA20: {indicators.get('EMA20','N/A')}\n"
+            f"- EMA50: {indicators.get('EMA50','N/A')}\n"
+            f"- Bollinger: {indicators.get('Bollinger','N/A')}\n\n"
+            f"Luôn trả JSON chuẩn: {{\"side\":\"LONG/SHORT\",\"strength\": %, \"reason\":\"...\"}}"
         )
 
         async with aiohttp.ClientSession() as session:
@@ -129,26 +150,34 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL", "deepseek-chat-v3-0324:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia crypto. Luôn trả JSON: {\"side\":\"LONG/SHORT\",\"strength\":% ,\"reason\":\"...\"}"},
+                    {"role": "system", "content": "Bạn là chuyên gia crypto. Trả JSON hợp lệ duy nhất."},
                     {"role": "user", "content": msg}
                 ]
             }
-            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
-                                     headers=headers, data=json.dumps(payload), timeout=50) as resp:
+            async with session.post(
+                os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
+                headers=headers, data=json.dumps(payload), timeout=50
+            ) as resp:
                 data = await resp.json()
                 if "choices" not in data:
                     print("[AI ERROR]", data)
                     return None
                 ai_text = data["choices"][0]["message"]["content"]
 
+                # bắt buộc JSON
                 try:
                     result = json.loads(ai_text)
                 except:
                     print("[AI ERROR] JSON sai:", ai_text)
                     return None
 
+                # giới hạn strength từ 50-100
                 strength = max(50, min(100, result.get("strength", 70)))
-                return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI phân tích")}
+                return {
+                    "side": result.get("side", "LONG"),
+                    "strength": strength,
+                    "reason": result.get("reason", "AI phân tích")
+                }
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
         return None
