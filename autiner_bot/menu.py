@@ -1,95 +1,167 @@
-from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import ContextTypes
-from autiner_bot.utils import state
-from autiner_bot.data_sources.mexc import get_usdt_vnd_rate, get_all_futures, analyze_coin
-from autiner_bot.utils.time_utils import get_vietnam_time
+import aiohttp
+import traceback
+import os
+import json
+import numpy as np
 
-# ==== Tạo menu ====
-def get_reply_menu():
-    s = state.get_state()
-    currency_btn = "💵 USD Mode" if s["currency_mode"] == "VND" else "💴 VND Mode"
-    keyboard = [["🔍 Trạng thái", currency_btn]]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+MEXC_BASE_URL = "https://contract.mexc.com"
 
-# ==== /start ====
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    s = state.get_state()
-    msg = (
-        f"📡 Bot thủ công: nhập tên coin để phân tích\n"
-        f"• Đơn vị: {s['currency_mode']}\n"
-        f"• AI: {state.get_state().get('ai_model','meta-llama/llama-3.1-8b-instruct:free')}"
-    )
-    await update.message.reply_text(msg, reply_markup=get_reply_menu())
+# =============================
+# Lấy toàn bộ coin Futures
+# =============================
+async def get_all_futures():
+    try:
+        url = f"{MEXC_BASE_URL}/api/v1/contract/ticker"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=15) as resp:
+                data = await resp.json()
+                if not data or "data" not in data:
+                    return []
+                return data["data"]
+    except Exception as e:
+        print(f"[ERROR] get_all_futures: {e}")
+        print(traceback.format_exc())
+        return []
 
-# ==== Xử lý input ====
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().lower()
+# =============================
+# Lấy tỷ giá USDT/VND (Binance P2P)
+# =============================
+async def get_usdt_vnd_rate() -> float:
+    url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
+    payload = {"asset": "USDT","fiat": "VND","merchantCheck": False,"page": 1,"rows": 10,"tradeType": "SELL"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=15) as resp:
+                data = await resp.json()
+                advs = data.get("data", [])
+                if not advs:
+                    return 0
+                prices = [float(ad["adv"]["price"]) for ad in advs[:5] if "adv" in ad]
+                return sum(prices) / len(prices) if prices else 0
+    except Exception as e:
+        print(f"[ERROR] get_usdt_vnd_rate: {e}")
+        return 0
 
-    # chuyển đơn vị
-    if text in ["💴 vnd mode", "💵 usd mode"]:
-        new_mode = "VND" if text == "💴 vnd mode" else "USD"
-        state.set_currency_mode(new_mode)
-        await update.message.reply_text(f"💱 Đã chuyển sang {new_mode}", reply_markup=get_reply_menu())
-        return
+# =============================
+# Lấy dữ liệu Kline (nến)
+# =============================
+async def get_kline(symbol: str, interval="Min15", limit=100):
+    try:
+        url = f"{MEXC_BASE_URL}/api/v1/contract/kline/{symbol}?interval={interval}&limit={limit}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=15) as resp:
+                data = await resp.json()
+                return data.get("data", [])
+    except Exception as e:
+        print(f"[ERROR] get_kline({symbol}): {e}")
+        return []
 
-    # trạng thái
-    if text == "🔍 trạng thái":
-        s = state.get_state()
-        await update.message.reply_text(
-            f"📡 Bot thủ công\n• Đơn vị: {s['currency_mode']}\n• AI: {state.get_state().get('ai_model')}",
-            reply_markup=get_reply_menu()
+# =============================
+# Tính RSI, MACD, EMA, Bollinger
+# =============================
+def calculate_indicators(klines):
+    try:
+        closes = np.array([float(k[4]) for k in klines], dtype=float)
+
+        ema20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
+        ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else closes[-1]
+
+        deltas = np.diff(closes)
+        ups = deltas[deltas > 0].sum() / 14 if len(deltas) >= 14 else 0
+        downs = -deltas[deltas < 0].sum() / 14 if len(deltas) >= 14 else 0
+        rs = (ups / downs) if downs != 0 else 0
+        rsi = 100 - (100 / (1 + rs)) if rs != 0 else 50
+
+        ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else closes[-1]
+        ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else closes[-1]
+        macd = ema12 - ema26
+        signal = np.mean([ema12, ema26])
+        macd_signal = "bullish" if macd > signal else "bearish"
+
+        mid = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
+        std = np.std(closes[-20:]) if len(closes) >= 20 else 0
+        upper = mid + 2 * std
+        lower = mid - 2 * std
+        last_close = closes[-1]
+        if last_close >= upper:
+            bb_status = "gần biên trên"
+        elif last_close <= lower:
+            bb_status = "gần biên dưới"
+        else:
+            bb_status = "trong dải"
+
+        return {"RSI": round(rsi, 2), "MACD": macd_signal,
+                "EMA20": round(ema20, 6), "EMA50": round(ema50, 6),
+                "Bollinger": bb_status}
+    except Exception as e:
+        print(f"[ERROR] calculate_indicators: {e}")
+        return {}
+
+# =============================
+# AI phân tích coin (ép JSON sạch)
+# =============================
+async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
+    try:
+        klines = await get_kline(symbol, "Min15", 100)
+        indicators = calculate_indicators(klines) if klines else {}
+
+        if not indicators:
+            indicators = {"RSI": 50, "MACD": "neutral", "EMA20": price, "EMA50": price, "Bollinger": "không xác định"}
+
+        OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+        if not OPENROUTER_KEY:
+            print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
+            return None
+
+        msg = (
+            f"Phân tích coin {symbol}:\n"
+            f"- Giá hiện tại: {price}\n"
+            f"- Biến động 24h: {change_pct}%\n"
+            f"- Xu hướng thị trường: {market_trend}\n"
+            f"- RSI: {indicators['RSI']}\n"
+            f"- MACD: {indicators['MACD']}\n"
+            f"- EMA20: {indicators['EMA20']}\n"
+            f"- EMA50: {indicators['EMA50']}\n"
+            f"- Bollinger: {indicators['Bollinger']}\n\n"
+            f"👉 Chỉ trả JSON: {{\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"ngắn gọn\"}}"
         )
-        return
 
-    # nhập coin bất kỳ
-    all_coins = await get_all_futures()
-    if not all_coins:
-        await update.message.reply_text("⚠️ Không lấy được dữ liệu từ MEXC.")
-        return
+        async with aiohttp.ClientSession() as session:
+            headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
+            payload = {
+                "model": os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free"),
+                "messages": [
+                    {"role": "system", "content": "Bạn là chuyên gia crypto. Luôn trả về JSON hợp lệ."},
+                    {"role": "user", "content": msg}
+                ]
+            }
+            async with session.post(
+                os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
+                headers=headers, data=json.dumps(payload), timeout=50
+            ) as resp:
+                data = await resp.json()
+                if "choices" not in data:
+                    print("[AI ERROR]", data)
+                    return None
 
-    query = text.upper()
-    symbol = None
-    if f"{query}_USDT" in [c["symbol"] for c in all_coins]:
-        symbol = f"{query}_USDT"
-    else:
-        for c in all_coins:
-            if c["symbol"].startswith(query):
-                symbol = c["symbol"]
-                break
+                ai_text = data["choices"][0]["message"]["content"].strip()
 
-    if not symbol:
-        await update.message.reply_text(f"⚠️ Không tìm thấy {query} trên MEXC Futures")
-        return
+                # 🔥 Fix JSON parsing triệt để
+                start = ai_text.find("{")
+                end = ai_text.rfind("}") + 1
+                json_str = ai_text[start:end]
 
-    # lấy dữ liệu coin
-    coin = next(c for c in all_coins if c["symbol"] == symbol)
-    price = float(coin.get("lastPrice", 0))
-    change_pct = float(coin.get("riseFallRate", 0)) * 100
-    vnd_rate = await get_usdt_vnd_rate() if state.get_state()["currency_mode"] == "VND" else None
-
-    # gọi AI phân tích
-    trend = await analyze_coin(symbol, price, change_pct, {"trend": "N/A"})
-    if not trend:
-        await update.message.reply_text(f"⚠️ AI không phân tích được {symbol}", reply_markup=get_reply_menu())
-        return
-
-    # format giá
-    entry = price
-    entry_price = entry * vnd_rate if vnd_rate else entry
-    tp = entry * (1.01 if trend["side"] == "LONG" else 0.99)
-    sl = entry * (0.99 if trend["side"] == "LONG" else 1.01)
-    tp_price = tp * vnd_rate if vnd_rate else tp
-    sl_price = sl * vnd_rate if vnd_rate else sl
-
-    msg = (
-        f"📈⭐ {symbol.replace('_USDT','/'+state.get_state()['currency_mode'])} — "
-        f"{'🟢 LONG' if trend['side']=='LONG' else '🟥 SHORT'}\n\n"
-        f"🔹 Kiểu vào lệnh: Market\n"
-        f"💰 Entry: {entry_price:,.2f} {state.get_state()['currency_mode']}\n"
-        f"🎯 TP: {tp_price:,.2f} {state.get_state()['currency_mode']}\n"
-        f"🛡️ SL: {sl_price:,.2f} {state.get_state()['currency_mode']}\n"
-        f"📊 Độ mạnh: {trend['strength']}%\n"
-        f"📌 Lý do: {trend['reason']}\n"
-        f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
-    )
-    await update.message.reply_text(msg, reply_markup=get_reply_menu())
+                try:
+                    result = json.loads(json_str)
+                    strength = max(50, min(100, result.get("strength", 70)))
+                    return {
+                        "side": result.get("side", "LONG"),
+                        "strength": strength,
+                        "reason": result.get("reason", "AI phân tích")
+                    }
+                except Exception as e:
+                    print("[AI JSON ERROR]", ai_text, e)
+                    return None
+    except Exception as e:
+        print(f"[ERROR] analyze_coin({symbol}): {e}")
+        return None
