@@ -7,7 +7,7 @@ import numpy as np
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy toàn bộ coin Futures (không lọc)
+# Lấy toàn bộ coin Futures
 # =============================
 async def get_all_futures():
     try:
@@ -28,14 +28,7 @@ async def get_all_futures():
 # =============================
 async def get_usdt_vnd_rate() -> float:
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-    payload = {
-        "asset": "USDT",
-        "fiat": "VND",
-        "merchantCheck": False,
-        "page": 1,
-        "rows": 10,
-        "tradeType": "SELL"
-    }
+    payload = {"asset": "USDT","fiat": "VND","merchantCheck": False,"page": 1,"rows": 10,"tradeType": "SELL"}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=15) as resp:
@@ -70,25 +63,21 @@ def calculate_indicators(klines):
     try:
         closes = np.array([float(k[4]) for k in klines], dtype=float)
 
-        # EMA
         ema20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
         ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else closes[-1]
 
-        # RSI(14)
         deltas = np.diff(closes)
         ups = deltas[deltas > 0].sum() / 14 if len(deltas) >= 14 else 0
         downs = -deltas[deltas < 0].sum() / 14 if len(deltas) >= 14 else 0
         rs = (ups / downs) if downs != 0 else 0
         rsi = 100 - (100 / (1 + rs)) if rs != 0 else 50
 
-        # MACD
         ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else closes[-1]
         ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else closes[-1]
         macd = ema12 - ema26
         signal = np.mean([ema12, ema26])
         macd_signal = "bullish" if macd > signal else "bearish"
 
-        # Bollinger Bands
         mid = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
         std = np.std(closes[-20:]) if len(closes) >= 20 else 0
         upper = mid + 2 * std
@@ -113,12 +102,13 @@ def calculate_indicators(klines):
         return {}
 
 # =============================
-# AI phân tích coin (ép JSON)
+# AI phân tích coin
 # =============================
 async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
         klines = await get_kline(symbol, "Min15", 100)
         indicators = calculate_indicators(klines) if klines else {}
+
         if not indicators:
             indicators = {"RSI": 50, "MACD": "neutral", "EMA20": price, "EMA50": price, "Bollinger": "không xác định"}
 
@@ -129,15 +119,15 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
 
         msg = (
             f"Phân tích coin {symbol}:\n"
-            f"- Giá hiện tại: {price}\n"
+            f"- Giá: {price}\n"
             f"- Biến động 24h: {change_pct}%\n"
             f"- Xu hướng thị trường: {market_trend}\n"
-            f"- RSI(14): {indicators['RSI']}\n"
+            f"- RSI: {indicators['RSI']}\n"
             f"- MACD: {indicators['MACD']}\n"
             f"- EMA20: {indicators['EMA20']}\n"
             f"- EMA50: {indicators['EMA50']}\n"
             f"- Bollinger: {indicators['Bollinger']}\n\n"
-            f"👉 Chỉ trả về JSON hợp lệ dạng: "
+            f"👉 Chỉ trả về JSON: "
             f"{{\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"ngắn gọn\"}}"
         )
 
@@ -160,8 +150,14 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
                     return None
 
                 ai_text = data["choices"][0]["message"]["content"].strip()
+
+                # Cắt JSON từ text
+                start = ai_text.find("{")
+                end = ai_text.rfind("}") + 1
+                json_str = ai_text[start:end]
+
                 try:
-                    result = json.loads(ai_text)
+                    result = json.loads(json_str)
                     strength = max(50, min(100, result.get("strength", 70)))
                     return {
                         "side": result.get("side", "LONG"),
