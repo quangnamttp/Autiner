@@ -4,7 +4,7 @@ from autiner_bot.utils import state
 from autiner_bot.data_sources.mexc import get_usdt_vnd_rate, get_top_futures, analyze_coin
 from autiner_bot.utils.time_utils import get_vietnam_time
 
-# ==== Tạo menu ====
+# ==== Menu động ====
 def get_reply_menu():
     s = state.get_state()
     currency_btn = "💵 USD Mode" if s["currency_mode"] == "VND" else "💴 VND Mode"
@@ -15,7 +15,8 @@ def get_reply_menu():
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = state.get_state()
     msg = (
-        f"📡 Bot thủ công: nhập tên coin để phân tích\n"
+        "🤖 Bot phân tích thủ công\n"
+        "👉 Nhập tên coin (vd: BTC, ETH, PEPE...) để phân tích\n"
         f"• Đơn vị: {s['currency_mode']}"
     )
     await update.message.reply_text(msg, reply_markup=get_reply_menu())
@@ -24,14 +25,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().lower()
 
-    # chuyển đơn vị
+    # === chuyển đơn vị ===
     if text in ["💴 vnd mode", "💵 usd mode"]:
         new_mode = "VND" if text == "💴 vnd mode" else "USD"
         state.set_currency_mode(new_mode)
         await update.message.reply_text(f"💱 Đã chuyển sang {new_mode}", reply_markup=get_reply_menu())
         return
 
-    # trạng thái
+    # === trạng thái ===
     if text == "🔍 trạng thái":
         s = state.get_state()
         await update.message.reply_text(
@@ -40,32 +41,28 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # nhập coin bất kỳ
+    # === nhập coin bất kỳ ===
     all_coins = await get_top_futures(limit=200)
     symbols = [c["symbol"] for c in all_coins]
     query = text.upper()
     symbol = None
 
-    # check exact
     if f"{query}_USDT" in symbols:
         symbol = f"{query}_USDT"
-    elif f"{query}USDT" in symbols:
-        symbol = f"{query}USDT"
     else:
-        # fuzzy match: chứa query ở bất kỳ vị trí nào
         for s in symbols:
-            if query in s:
+            if s.startswith(query):
                 symbol = s
                 break
 
     if not symbol:
-        await update.message.reply_text(f"⚠️ Không tìm thấy {query} trên MEXC")
+        await update.message.reply_text(f"⚠️ Không tìm thấy {query} trên MEXC Futures")
         return
 
-    # lấy coin info
+    # lấy dữ liệu coin
     coin = next(c for c in all_coins if c["symbol"] == symbol)
     vnd_rate = await get_usdt_vnd_rate() if state.get_state()["currency_mode"] == "VND" else None
-    trend = await analyze_coin(symbol, coin["lastPrice"], coin["change_pct"], {"trend": "N/A"})
+    trend = await analyze_coin(symbol, coin["lastPrice"], coin["change_pct"], {"trend":"Tự phân tích"})
 
     if not trend:
         await update.message.reply_text(f"⚠️ Không phân tích được {symbol}")
@@ -78,11 +75,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tp_price = tp * vnd_rate if vnd_rate else tp
     sl_price = sl * vnd_rate if vnd_rate else sl
 
-    # gọn gàng hơn: chỉ lấy lý do ngắn
-    reason = trend['reason']
-    if len(reason) > 120:  # cắt bớt lý do dài dòng
-        reason = reason[:120] + "..."
-
+    # === gửi kết quả ===
     msg = (
         f"📈⭐ {symbol.replace('_USDT','/'+state.get_state()['currency_mode'])} — "
         f"{'🟢 LONG' if trend['side']=='LONG' else '🟥 SHORT'}\n\n"
@@ -91,7 +84,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎯 TP: {tp_price:,.2f} {state.get_state()['currency_mode']}\n"
         f"🛡️ SL: {sl_price:,.2f} {state.get_state()['currency_mode']}\n"
         f"📊 Độ mạnh: {trend['strength']}%\n"
-        f"📌 Lý do: {reason}\n"
+        f"📌 Lý do: {trend['reason']}\n"
         f"🕒 Thời gian: {get_vietnam_time().strftime('%H:%M %d/%m/%Y')}"
     )
     await update.message.reply_text(msg, reply_markup=get_reply_menu())
