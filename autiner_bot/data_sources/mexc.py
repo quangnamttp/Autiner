@@ -7,7 +7,7 @@ import numpy as np
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy toàn bộ coin Futures (không lọc)
+# Lấy toàn bộ coin Futures
 # =============================
 async def get_all_futures():
     try:
@@ -24,11 +24,14 @@ async def get_all_futures():
         return []
 
 # =============================
-# Lấy tỷ giá USDT/VND
+# Lấy tỷ giá USDT/VND (Binance P2P)
 # =============================
 async def get_usdt_vnd_rate() -> float:
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-    payload = {"asset": "USDT","fiat": "VND","merchantCheck": False,"page": 1,"rows": 10,"tradeType": "SELL"}
+    payload = {
+        "asset": "USDT", "fiat": "VND",
+        "merchantCheck": False, "page": 1, "rows": 10, "tradeType": "SELL"
+    }
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=15) as resp:
@@ -43,7 +46,7 @@ async def get_usdt_vnd_rate() -> float:
         return 0
 
 # =============================
-# Lấy dữ liệu Kline (nến)
+# Lấy dữ liệu Kline
 # =============================
 async def get_kline(symbol: str, interval="Min15", limit=100):
     try:
@@ -62,28 +65,26 @@ async def get_kline(symbol: str, interval="Min15", limit=100):
 def calculate_indicators(klines):
     try:
         closes = np.array([float(k[4]) for k in klines], dtype=float)  # close price
+        if len(closes) < 20:
+            return {}
 
-        # EMA
-        ema20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
-        ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else closes[-1]
+        ema20 = np.mean(closes[-20:])
+        ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else np.mean(closes)
 
-        # RSI(14)
         deltas = np.diff(closes)
         ups = deltas[deltas > 0].sum() / 14 if len(deltas) >= 14 else 0
         downs = -deltas[deltas < 0].sum() / 14 if len(deltas) >= 14 else 0
         rs = (ups / downs) if downs != 0 else 0
         rsi = 100 - (100 / (1 + rs)) if rs != 0 else 50
 
-        # MACD (12,26,9)
         ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else closes[-1]
         ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else closes[-1]
         macd = ema12 - ema26
         signal = np.mean([ema12, ema26])
         macd_signal = "bullish" if macd > signal else "bearish"
 
-        # Bollinger Bands (20, 2)
-        mid = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
-        std = np.std(closes[-20:]) if len(closes) >= 20 else 0
+        mid = np.mean(closes[-20:])
+        std = np.std(closes[-20:])
         upper = mid + 2 * std
         lower = mid - 2 * std
         last_close = closes[-1]
@@ -106,11 +107,10 @@ def calculate_indicators(klines):
         return {}
 
 # =============================
-# AI phân tích coin (luôn có lý do rõ ràng)
+# AI phân tích coin
 # =============================
-async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
+async def analyze_coin(symbol: str, price: float, change_pct: float):
     try:
-        # Lấy dữ liệu kline + chỉ báo
         klines = await get_kline(symbol, "Min15", 100)
         indicators = calculate_indicators(klines) if klines else {}
 
@@ -119,24 +119,19 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
             return None
 
-        prompt = (
-            f"Phân tích coin {symbol}:\n"
-            f"- Giá hiện tại: {price}\n"
-            f"- Biến động 24h: {change_pct}%\n"
-            f"- Xu hướng thị trường: {market_trend}\n"
-            f"- Chỉ báo kỹ thuật: {indicators}\n\n"
-            f"Trả về JSON hợp lệ, không có text ngoài JSON:\n"
-            f"{{\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"giải thích ngắn gọn vì sao chọn LONG/SHORT\"}}"
+        msg = (
+            f"Phân tích coin {symbol}, giá hiện tại={price}, biến động 24h={change_pct}%.\n"
+            f"Chỉ báo kỹ thuật: {indicators}\n\n"
+            f"Trả về đúng JSON: {{\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"...\"}}"
         )
 
-        # Gọi AI
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL", "deepseek-chat-v3-0324:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia crypto. Luôn trả JSON hợp lệ."},
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": "Bạn là chuyên gia crypto."},
+                    {"role": "user", "content": msg}
                 ]
             }
             async with session.post(
@@ -144,53 +139,23 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
                 headers=headers, data=json.dumps(payload), timeout=50
             ) as resp:
                 data = await resp.json()
+                if "choices" not in data:
+                    print("[AI ERROR]", data)
+                    return None
+                ai_text = data["choices"][0]["message"]["content"]
 
-        if "choices" not in data:
-            print("[AI ERROR]", data)
-            return None
+                try:
+                    result = json.loads(ai_text)
+                except:
+                    print("[AI ERROR] JSON sai:", ai_text)
+                    return None
 
-        ai_text = data["choices"][0]["message"]["content"]
-
-        # Parse JSON
-        try:
-            start = ai_text.rfind("{")
-            end = ai_text.rfind("}") + 1
-            result = json.loads(ai_text[start:end])
-        except:
-            print("[AI ERROR] JSON sai:", ai_text)
-            result = None
-
-        # Nếu AI fail → backup bằng indicators
-        if not result:
-            rsi = indicators.get("RSI", 50)
-            ema20 = indicators.get("EMA20")
-            ema50 = indicators.get("EMA50")
-            macd = indicators.get("MACD", "neutral")
-
-            if rsi < 30:
-                side, reason = "LONG", f"RSI={rsi} quá bán → khả năng hồi"
-            elif rsi > 70:
-                side, reason = "SHORT", f"RSI={rsi} quá mua → dễ điều chỉnh"
-            elif ema20 and ema50 and price > ema20 > ema50:
-                side, reason = "LONG", f"Giá {price} > EMA20 {ema20} > EMA50 {ema50} → xu hướng tăng"
-            elif ema20 and ema50 and price < ema20 < ema50:
-                side, reason = "SHORT", f"Giá {price} < EMA20 {ema20} < EMA50 {ema50} → xu hướng giảm"
-            elif macd == "bullish":
-                side, reason = "LONG", "MACD bullish → tín hiệu tăng"
-            elif macd == "bearish":
-                side, reason = "SHORT", "MACD bearish → tín hiệu giảm"
-            else:
-                side, reason = "LONG", "Không rõ tín hiệu, mặc định LONG"
-
-            return {"side": side, "strength": 60, "reason": reason}
-
-        strength = max(50, min(100, result.get("strength", 70)))
-        return {
-            "side": result.get("side", "LONG"),
-            "strength": strength,
-            "reason": result.get("reason", "AI phân tích")
-        }
-
+                strength = max(50, min(100, result.get("strength", 70)))
+                return {
+                    "side": result.get("side", "LONG"),
+                    "strength": strength,
+                    "reason": result.get("reason", "AI phân tích")
+                }
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
         return None
