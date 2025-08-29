@@ -12,9 +12,15 @@ class Settings:
 
     # OpenRouter (AI)
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
-    OPENROUTER_API_URL: str = os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions")
-    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "deepseek-chat-v3-0324:free")
-    # 👉 có thể đổi sang "meta-llama/llama-3.1-8b-instruct:free" nếu muốn gọn, nhanh hơn
+    OPENROUTER_API_URL: str = os.getenv(
+        "OPENROUTER_API_URL",
+        "https://openrouter.ai/api/v1/chat/completions"
+    )
+    # 🔑 đổi mặc định sang LLaMA free để chắc chắn chạy mượt
+    OPENROUTER_MODEL: str = os.getenv(
+        "OPENROUTER_MODEL",
+        "meta-llama/llama-3.1-8b-instruct:free"
+    )
 
     # API MEXC
     MEXC_BASE_URL: str = "https://contract.mexc.com"
