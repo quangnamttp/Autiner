@@ -63,7 +63,6 @@ def calculate_indicators(klines):
     try:
         closes = np.array([float(k[4]) for k in klines], dtype=float)  # close price
 
-        # EMA
         ema20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
         ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else closes[-1]
 
@@ -74,14 +73,14 @@ def calculate_indicators(klines):
         rs = (ups / downs) if downs != 0 else 0
         rsi = 100 - (100 / (1 + rs)) if rs != 0 else 50
 
-        # MACD (12,26,9)
+        # MACD
         ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else closes[-1]
         ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else closes[-1]
         macd = ema12 - ema26
         signal = np.mean([ema12, ema26])
         macd_signal = "bullish" if macd > signal else "bearish"
 
-        # Bollinger Bands (20, 2)
+        # Bollinger Bands
         mid = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
         std = np.std(closes[-20:]) if len(closes) >= 20 else 0
         upper = mid + 2 * std
@@ -94,79 +93,77 @@ def calculate_indicators(klines):
         else:
             bb_status = "trong dải"
 
-        return {
-            "RSI": round(rsi, 2),
-            "MACD": macd_signal,
-            "EMA20": round(ema20, 4),
-            "EMA50": round(ema50, 4),
-            "Bollinger": bb_status
-        }
+        return {"RSI": round(rsi, 2), "MACD": macd_signal,
+                "EMA20": round(ema20, 6), "EMA50": round(ema50, 6),
+                "Bollinger": bb_status}
     except Exception as e:
         print(f"[ERROR] calculate_indicators: {e}")
         return {}
 
 # =============================
-# AI phân tích coin (có fallback chỉ báo)
+# AI phân tích coin (có fallback logic)
 # =============================
 async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
-        # Lấy dữ liệu kline + chỉ báo
         klines = await get_kline(symbol, "Min15", 100)
         indicators = calculate_indicators(klines) if klines else {}
+
+        # Nếu không có dữ liệu chỉ báo -> tạo mặc định
         if not indicators:
             indicators = {"RSI": 50, "MACD": "neutral", "EMA20": price, "EMA50": price, "Bollinger": "không xác định"}
 
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
-            print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
-            # fallback chỉ báo
-            side = "LONG" if indicators["RSI"] < 70 else "SHORT"
-            reason = f"Fallback: RSI={indicators['RSI']}, MACD={indicators['MACD']}, EMA20={indicators['EMA20']}, EMA50={indicators['EMA50']}, BB={indicators['Bollinger']}"
-            return {"side": side, "strength": 60, "reason": reason}
+            return fallback_decision(indicators)
 
-        msg = (
-            f"Phân tích {symbol}, giá={price}, biến động={change_pct}%, xu hướng={market_trend}.\n"
-            f"Chỉ báo: {indicators}"
-        )
+        msg = f"Phân tích {symbol}, giá={price}, biến động={change_pct}%, xu hướng={market_trend}. Chỉ báo: {indicators}"
 
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL", "deepseek-chat-v3-0324:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia crypto. Luôn trả về JSON: {\"side\":\"LONG/SHORT\",\"strength\": %,\"reason\":\"ngắn gọn giải thích\"}"},
+                    {"role": "system", "content": "Bạn là chuyên gia crypto. Luôn trả JSON: {\"side\":\"LONG/SHORT\",\"strength\": % ,\"reason\":\"ngắn gọn giải thích\"}"},
                     {"role": "user", "content": msg}
                 ]
             }
-            async with session.post(
-                os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
-                headers=headers, data=json.dumps(payload), timeout=50
-            ) as resp:
+            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
+                                     headers=headers, data=json.dumps(payload), timeout=50) as resp:
                 data = await resp.json()
                 if "choices" not in data:
-                    print("[AI ERROR]", data)
-                    # fallback khi API lỗi
-                    side = "LONG" if indicators["RSI"] < 70 else "SHORT"
-                    reason = f"API lỗi - fallback: RSI={indicators['RSI']}, MACD={indicators['MACD']}, EMA20={indicators['EMA20']}, EMA50={indicators['EMA50']}, BB={indicators['Bollinger']}"
-                    return {"side": side, "strength": 65, "reason": reason}
+                    return fallback_decision(indicators)
 
                 ai_text = data["choices"][0]["message"]["content"]
-
                 try:
                     result = json.loads(ai_text)
                     strength = max(50, min(100, result.get("strength", 70)))
-                    return {
-                        "side": result.get("side", "LONG"),
-                        "strength": strength,
-                        "reason": result.get("reason", "AI phân tích")
-                    }
+                    return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI phân tích")}
                 except:
-                    print("[AI ERROR] JSON sai:", ai_text)
-                    # fallback khi AI trả text lung tung
-                    side = "LONG" if indicators["RSI"] < 70 else "SHORT"
-                    reason = f"JSON sai - fallback: RSI={indicators['RSI']}, MACD={indicators['MACD']}, EMA20={indicators['EMA20']}, EMA50={indicators['EMA50']}, BB={indicators['Bollinger']}"
-                    return {"side": side, "strength": 60, "reason": reason}
-
+                    return fallback_decision(indicators)
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
-        return {"side": "LONG", "strength": 55, "reason": "Lỗi không xác định, fallback LONG"}
+        return fallback_decision({})
+
+# =============================
+# Fallback chỉ báo (logic kỹ thuật)
+# =============================
+def fallback_decision(ind):
+    rsi = ind.get("RSI", 50)
+    macd = ind.get("MACD", "neutral")
+    ema20, ema50 = ind.get("EMA20", 0), ind.get("EMA50", 0)
+
+    score_long, score_short = 0, 0
+
+    if rsi < 30: score_long += 2
+    elif rsi > 70: score_short += 2
+
+    if macd == "bullish": score_long += 1
+    elif macd == "bearish": score_short += 1
+
+    if ema20 > ema50: score_long += 1
+    else: score_short += 1
+
+    side = "LONG" if score_long >= score_short else "SHORT"
+    strength = 55 + 10 * abs(score_long - score_short)
+    reason = f"Fallback theo chỉ báo: RSI={rsi}, MACD={macd}, EMA20={ema20}, EMA50={ema50}"
+    return {"side": side, "strength": min(90, strength), "reason": reason}
