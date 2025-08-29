@@ -1,7 +1,7 @@
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from autiner_bot.utils import state
-from autiner_bot.data_sources.mexc import get_usdt_vnd_rate, get_all_futures, analyze_coin
+from autiner_bot.data_sources.mexc import get_usdt_vnd_rate, get_all_futures, analyze_coin, calculate_indicators, get_kline
 from autiner_bot.utils.time_utils import get_vietnam_time
 
 # ==== Tạo menu ====
@@ -24,14 +24,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().lower()
 
-    # chuyển đơn vị
+    # Chuyển đơn vị
     if text in ["💴 vnd mode", "💵 usd mode"]:
         new_mode = "VND" if text == "💴 vnd mode" else "USD"
         state.set_currency_mode(new_mode)
         await update.message.reply_text(f"💱 Đã chuyển sang {new_mode}", reply_markup=get_reply_menu())
         return
 
-    # trạng thái
+    # Trạng thái
     if text == "🔍 trạng thái":
         s = state.get_state()
         await update.message.reply_text(
@@ -40,7 +40,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # nhập coin bất kỳ
+    # Nhập coin bất kỳ
     all_coins = await get_all_futures()
     if not all_coins:
         await update.message.reply_text("⚠️ Không lấy được dữ liệu từ MEXC.")
@@ -63,13 +63,23 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coin = next(c for c in all_coins if c["symbol"] == symbol)
     vnd_rate = await get_usdt_vnd_rate() if state.get_state()["currency_mode"] == "VND" else None
 
-    # gọi AI phân tích
-    trend = await analyze_coin(symbol, coin["lastPrice"], coin["change_pct"], {"trend":"N/A"})
-    if not trend:
-        await update.message.reply_text(f"⚠️ Không phân tích được {symbol}")
-        return
+    # Lấy Kline + chỉ báo
+    klines = await get_kline(symbol, "Min15", 100)
+    indicators = calculate_indicators(klines) if klines else {}
 
-    # format giá
+    # Gọi AI phân tích
+    trend = await analyze_coin(symbol, coin["lastPrice"], coin["change_pct"], {"trend": "N/A", "indicators": indicators})
+
+    # Nếu AI fail → dùng fallback kỹ thuật
+    if not trend:
+        reason = f"Dựa vào chỉ báo RSI={indicators.get('RSI','?')}, MACD={indicators.get('MACD','?')}, EMA20={indicators.get('EMA20','?')}, EMA50={indicators.get('EMA50','?')}"
+        trend = {
+            "side": "LONG" if indicators.get("RSI", 50) < 70 else "SHORT",
+            "strength": 60,
+            "reason": reason
+        }
+
+    # Format giá
     entry = coin["lastPrice"]
     entry_price = entry * vnd_rate if vnd_rate else entry
     tp = entry * (1.01 if trend["side"]=="LONG" else 0.99)
