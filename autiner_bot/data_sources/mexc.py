@@ -2,140 +2,92 @@ import aiohttp
 import os
 import json
 import traceback
-import numpy as np
 
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy dữ liệu Kline (nến 1m)
+# Lấy toàn bộ coin Futures từ MEXC (không lọc)
 # =============================
-async def get_klines(symbol: str, limit: int = 120):
-    url = f"{MEXC_BASE_URL}/api/v1/contract/kline/{symbol}?interval=Min1&limit={limit}"
+async def get_all_futures():
     try:
+        url = f"{MEXC_BASE_URL}/api/v1/contract/ticker"
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=15) as resp:
+            async with session.get(url, timeout=20) as resp:
                 data = await resp.json()
-                if "data" not in data:
+                if not data or "data" not in data:
                     return []
-                return data["data"]
+                tickers = data["data"]
+
+                coins = []
+                for t in tickers:
+                    if not t.get("symbol", "").endswith("_USDT"):
+                        continue
+                    coins.append({
+                        "symbol": t["symbol"],
+                        "lastPrice": float(t.get("lastPrice", 0)),
+                        "volume": float(t.get("amount24", 0)),
+                        "change_pct": float(t.get("riseFallRate", 0)) * 100
+                    })
+                return coins
     except Exception as e:
-        print(f"[ERROR] get_klines({symbol}): {e}")
+        print(f"[ERROR] get_all_futures: {e}")
+        print(traceback.format_exc())
         return []
 
 # =============================
-# Các chỉ báo kỹ thuật
+# Lấy tỷ giá USDT/VND từ Binance
 # =============================
-def calculate_indicators(klines):
+async def get_usdt_vnd_rate() -> float:
+    url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
+    payload = {"asset": "USDT","fiat": "VND","merchantCheck": False,"page": 1,"rows": 10,"tradeType": "SELL"}
     try:
-        closes = np.array([float(k[4]) for k in klines])  # close price
-        if len(closes) < 50:
-            return {}
-
-        # RSI(14)
-        delta = np.diff(closes)
-        gain = np.where(delta > 0, delta, 0)
-        loss = np.where(delta < 0, -delta, 0)
-        avg_gain = np.mean(gain[-14:])
-        avg_loss = np.mean(loss[-14:]) + 1e-9
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-
-        # EMA20 & EMA50
-        def ema(arr, period):
-            k = 2 / (period + 1)
-            ema_vals = [np.mean(arr[:period])]
-            for price in arr[period:]:
-                ema_vals.append(price * k + ema_vals[-1] * (1 - k))
-            return ema_vals[-1]
-
-        ema20 = ema(closes, 20)
-        ema50 = ema(closes, 50)
-
-        # MACD (12,26,9)
-        def ema_series(arr, period):
-            k = 2 / (period + 1)
-            ema_vals = [np.mean(arr[:period])]
-            for price in arr[period:]:
-                ema_vals.append(price * k + ema_vals[-1] * (1 - k))
-            return np.array(ema_vals)
-
-        ema12 = ema_series(closes, 12)
-        ema26 = ema_series(closes, 26)
-        macd_line = ema12[-1] - ema26[-1]
-        signal_line = np.mean(macd_line)  # simple approx
-        macd_status = "cắt lên" if macd_line > signal_line else "cắt xuống"
-
-        # Bollinger Bands (20,2)
-        sma20 = np.mean(closes[-20:])
-        std20 = np.std(closes[-20:])
-        upper = sma20 + 2 * std20
-        lower = sma20 - 2 * std20
-        bb_position = "gần biên trên" if closes[-1] > sma20 else "gần biên dưới"
-
-        return {
-            "RSI": round(rsi, 2),
-            "EMA20": round(ema20, 4),
-            "EMA50": round(ema50, 4),
-            "MACD": round(macd_line, 4),
-            "MACD_status": macd_status,
-            "Bollinger": bb_position,
-            "Upper": round(upper, 4),
-            "Lower": round(lower, 4),
-        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=20) as resp:
+                data = await resp.json()
+                advs = data.get("data", [])
+                if not advs:
+                    return 0
+                prices = [float(ad["adv"]["price"]) for ad in advs[:5] if "adv" in ad]
+                return sum(prices) / len(prices) if prices else 0
     except Exception as e:
-        print(f"[ERROR] calculate_indicators: {e}")
-        return {}
+        print(f"[ERROR] get_usdt_vnd_rate: {e}")
+        return 0
 
 # =============================
-# AI phân tích coin (DeepSeek)
+# AI phân tích coin (DeepSeek / Copilot qua OpenRouter)
 # =============================
 async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
-        klines = await get_klines(symbol)
-        if not klines:
-            return None
-        indicators = calculate_indicators(klines)
-
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
-            print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
+            print("[AI ERROR] Thiếu OPENROUTER_API_KEY")
             return None
-
-        prompt = f"""
-Phân tích coin {symbol}:
-- Giá hiện tại: {price}
-- Biến động 24h: {change_pct}%
-- Xu hướng thị trường: {market_trend}
-- RSI(14): {indicators.get('RSI')}
-- MACD: {indicators.get('MACD')} ({indicators.get('MACD_status')})
-- EMA20: {indicators.get('EMA20')}, EMA50: {indicators.get('EMA50')}
-- Bollinger Bands: {indicators.get('Bollinger')} (Upper={indicators.get('Upper')}, Lower={indicators.get('Lower')})
-
-Trả về đúng JSON:
-{{"side": "LONG/SHORT", "strength": %, "reason": "ngắn gọn"}}
-"""
 
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL", "deepseek-chat-v3-0324:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto."},
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": "Bạn là chuyên gia phân tích crypto. Luôn trả JSON dạng {\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"...\"}"},
+                    {"role": "user", "content": f"Phân tích coin {symbol}, giá={price}, biến động 24h={change_pct}%, xu hướng thị trường={market_trend}"}
                 ]
             }
-            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
-                                    headers=headers, data=json.dumps(payload), timeout=40) as resp:
+            async with session.post(
+                os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"),
+                headers=headers, data=json.dumps(payload), timeout=40
+            ) as resp:
                 data = await resp.json()
                 if "choices" not in data:
-                    print("[AI ERROR]", data)
+                    print("[AI ERROR RESPONSE]", data)
                     return None
 
                 ai_text = data["choices"][0]["message"]["content"]
+
+                # Bắt buộc parse JSON
                 try:
                     result = json.loads(ai_text)
                 except:
-                    print("[AI JSON ERROR]:", ai_text)
+                    print("[AI JSON ERROR]", ai_text)
                     return None
 
                 strength = max(50, min(100, result.get("strength", 70)))
@@ -144,8 +96,6 @@ Trả về đúng JSON:
                     "strength": strength,
                     "reason": result.get("reason", "AI phân tích")
                 }
-
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
-        print(traceback.format_exc())
         return None
