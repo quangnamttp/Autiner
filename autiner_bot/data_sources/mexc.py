@@ -7,7 +7,7 @@ import numpy as np
 MEXC_BASE_URL = "https://contract.mexc.com"
 
 # =============================
-# Lấy toàn bộ coin Futures
+# Lấy toàn bộ coin Futures (không lọc)
 # =============================
 async def get_all_futures():
     try:
@@ -106,18 +106,23 @@ def calculate_indicators(klines):
         return {}
 
 # =============================
-# AI phân tích coin
+# AI phân tích coin (có fallback chỉ báo)
 # =============================
 async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
     try:
         # Lấy dữ liệu kline + chỉ báo
         klines = await get_kline(symbol, "Min15", 100)
         indicators = calculate_indicators(klines) if klines else {}
+        if not indicators:
+            indicators = {"RSI": 50, "MACD": "neutral", "EMA20": price, "EMA50": price, "Bollinger": "không xác định"}
 
         OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
         if not OPENROUTER_KEY:
             print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
-            return None
+            # fallback chỉ báo
+            side = "LONG" if indicators["RSI"] < 70 else "SHORT"
+            reason = f"Fallback: RSI={indicators['RSI']}, MACD={indicators['MACD']}, EMA20={indicators['EMA20']}, EMA50={indicators['EMA50']}, BB={indicators['Bollinger']}"
+            return {"side": side, "strength": 60, "reason": reason}
 
         msg = (
             f"Phân tích {symbol}, giá={price}, biến động={change_pct}%, xu hướng={market_trend}.\n"
@@ -129,30 +134,39 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL", "deepseek-chat-v3-0324:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia crypto. Luôn trả về JSON duy nhất, không có text ngoài. Cấu trúc: {\"side\":\"LONG/SHORT\",\"strength\": %,\"reason\":\"ngắn gọn giải thích vì sao (RSI, EMA, MACD, Bollinger...)\"}"},
+                    {"role": "system", "content": "Bạn là chuyên gia crypto. Luôn trả về JSON: {\"side\":\"LONG/SHORT\",\"strength\": %,\"reason\":\"ngắn gọn giải thích\"}"},
                     {"role": "user", "content": msg}
                 ]
             }
-            async with session.post(os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
-                                     headers=headers, data=json.dumps(payload), timeout=50) as resp:
+            async with session.post(
+                os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
+                headers=headers, data=json.dumps(payload), timeout=50
+            ) as resp:
                 data = await resp.json()
                 if "choices" not in data:
                     print("[AI ERROR]", data)
-                    return None
-                ai_text = data["choices"][0]["message"]["content"]
-
-                # Parse JSON AI trả về
-                try:
-                    result = json.loads(ai_text)
-                except:
-                    print("[AI ERROR] JSON sai:", ai_text)
-                    # fallback: tự build dựa trên indicators
-                    side = "LONG" if indicators.get("RSI", 50) < 70 and indicators.get("MACD") == "bullish" else "SHORT"
-                    reason = f"RSI={indicators.get('RSI')} | MACD={indicators.get('MACD')} | EMA20={indicators.get('EMA20')} | EMA50={indicators.get('EMA50')} | Bollinger={indicators.get('Bollinger')}"
+                    # fallback khi API lỗi
+                    side = "LONG" if indicators["RSI"] < 70 else "SHORT"
+                    reason = f"API lỗi - fallback: RSI={indicators['RSI']}, MACD={indicators['MACD']}, EMA20={indicators['EMA20']}, EMA50={indicators['EMA50']}, BB={indicators['Bollinger']}"
                     return {"side": side, "strength": 65, "reason": reason}
 
-                strength = max(50, min(100, result.get("strength", 70)))
-                return {"side": result.get("side", "LONG"), "strength": strength, "reason": result.get("reason", "AI phân tích")}
+                ai_text = data["choices"][0]["message"]["content"]
+
+                try:
+                    result = json.loads(ai_text)
+                    strength = max(50, min(100, result.get("strength", 70)))
+                    return {
+                        "side": result.get("side", "LONG"),
+                        "strength": strength,
+                        "reason": result.get("reason", "AI phân tích")
+                    }
+                except:
+                    print("[AI ERROR] JSON sai:", ai_text)
+                    # fallback khi AI trả text lung tung
+                    side = "LONG" if indicators["RSI"] < 70 else "SHORT"
+                    reason = f"JSON sai - fallback: RSI={indicators['RSI']}, MACD={indicators['MACD']}, EMA20={indicators['EMA20']}, EMA50={indicators['EMA50']}, BB={indicators['Bollinger']}"
+                    return {"side": side, "strength": 60, "reason": reason}
+
     except Exception as e:
         print(f"[ERROR] analyze_coin({symbol}): {e}")
-        return None
+        return {"side": "LONG", "strength": 55, "reason": "Lỗi không xác định, fallback LONG"}
