@@ -15,9 +15,7 @@ async def get_all_futures():
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=15) as resp:
                 data = await resp.json()
-                if not data or "data" not in data:
-                    return []
-                return data["data"]
+                return data.get("data", [])
     except Exception as e:
         print(f"[ERROR] get_all_futures: {e}")
         print(traceback.format_exc())
@@ -62,7 +60,6 @@ async def get_kline(symbol: str, interval="Min15", limit=100):
 def calculate_indicators(klines):
     try:
         closes = np.array([float(k[4]) for k in klines], dtype=float)
-
         ema20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
         ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else closes[-1]
 
@@ -127,7 +124,7 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
             f"- EMA20: {indicators['EMA20']}\n"
             f"- EMA50: {indicators['EMA50']}\n"
             f"- Bollinger: {indicators['Bollinger']}\n\n"
-            f"👉 Chỉ trả về JSON: "
+            f"👉 Trả về DUY NHẤT JSON hợp lệ: "
             f"{{\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"ngắn gọn\"}}"
         )
 
@@ -136,7 +133,7 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
             payload = {
                 "model": os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free"),
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia crypto. Luôn trả JSON hợp lệ."},
+                    {"role": "system", "content": "Bạn là chuyên gia crypto. Trả về DUY NHẤT một JSON hợp lệ, không thêm chữ nào khác."},
                     {"role": "user", "content": msg}
                 ]
             }
@@ -150,8 +147,9 @@ async def analyze_coin(symbol: str, price: float, change_pct: float, market_tren
                     return None
 
                 ai_text = data["choices"][0]["message"]["content"].strip()
+                print("=== AI RAW OUTPUT ===", ai_text)  # Debug
 
-                # Cắt JSON từ text
+                # Tìm JSON trong text
                 start = ai_text.find("{")
                 end = ai_text.rfind("}") + 1
                 json_str = ai_text[start:end]
