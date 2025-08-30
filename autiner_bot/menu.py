@@ -1,41 +1,67 @@
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from autiner_bot.utils import state
-from autiner_bot.data_sources.binance import get_usdt_vnd_rate, get_all_futures, analyze_coin
+from autiner_bot.data_sources.binance import (
+    get_usdt_vnd_rate,
+    analyze_coin,
+    get_all_futures,
+)
 from autiner_bot.utils.time_utils import get_vietnam_time
 
 import re
 import time
 
+# ====== Cache ticker 24h để tránh 429 ======
+_ALL_TICKERS_CACHE = {"ts": 0, "data": []}
+
+async def _get_all_futures_cached(ttl: int = 10):
+    """Cache danh sách futures trong ttl giây."""
+    now = int(time.time())
+    if now - _ALL_TICKERS_CACHE["ts"] <= ttl and _ALL_TICKERS_CACHE["data"]:
+        return _ALL_TICKERS_CACHE["data"]
+    data = await get_all_futures(ttl=ttl)  # đã có cache ở layer data_sources
+    if data:
+        _ALL_TICKERS_CACHE["ts"] = now
+        _ALL_TICKERS_CACHE["data"] = data
+    return data
+
 # ===== Helpers =====
 def _clean_symbol(text: str) -> str:
-    """Chuẩn hoá input người dùng thành dạng BASEUSDT"""
+    """
+    Chuẩn hoá input: " op / usdt " -> "OPUSDT"
+    Nếu người dùng chỉ gõ "op" thì tự thêm "USDT".
+    """
     t = (text or "").upper().strip()
     t = t.replace(" ", "").replace("-", "").replace("_", "")
-    t = t.replace("\\", "/").replace("USDC", "USDT").replace("USD", "USDT")
+    t = t.replace("\\", "/")
+    # Normalize quote to USDT
+    t = t.replace("USDC", "USDT").replace("USD", "USDT")
     t = re.sub(r"/+", "/", t)
     if "/" in t:
-        base, quote = t.split("/", 1)
+        base, _ = t.split("/", 1)
         t = base + "USDT"
     if not t.endswith("USDT"):
         t = t + "USDT"
     return t
 
-def _format_price(v: float, unit: str) -> str:
-    return f"{v:,.0f}" if unit == "VND" else f"{v:,.2f}"
-
 def _prefer_symbol(query_base: str, futures_list: list) -> str | None:
+    """
+    Chọn symbol tốt nhất:
+      1) Ưu tiên exact: BASEUSDT
+      2) Nếu không có, tìm symbol bắt đầu bằng BASE, sort theo quoteVolume giảm dần.
+    """
     exact = f"{query_base}USDT"
     have = [c.get("symbol") for c in futures_list]
     if exact in have:
         return exact
+
     candidates = []
     for c in futures_list:
         sym = c.get("symbol", "")
         if sym.startswith(query_base) and sym.endswith("USDT"):
             try:
                 vol = float(c.get("quoteVolume") or c.get("volume") or 0.0)
-            except:
+            except Exception:
                 vol = 0.0
             candidates.append((sym, vol))
     if not candidates:
@@ -43,26 +69,14 @@ def _prefer_symbol(query_base: str, futures_list: list) -> str | None:
     candidates.sort(key=lambda x: x[1], reverse=True)
     return candidates[0][0]
 
-# ====== Cache tỷ giá USDT/VND trong 60s ======
-_LAST_RATE = {"ts": 0, "value": 0.0}
-
-async def _get_rate_cached() -> float:
-    s = state.get_state()
-    if s.get("currency_mode", "USDT") != "VND":
-        return 0.0
-    now = int(time.time())
-    if now - _LAST_RATE["ts"] <= 60 and _LAST_RATE["value"] > 0:
-        return _LAST_RATE["value"]
-    rate = await get_usdt_vnd_rate()
-    if rate > 0:
-        _LAST_RATE["ts"] = now
-        _LAST_RATE["value"] = rate
-    return rate
+def _format_price(v: float, unit: str) -> str:
+    return f"{v:,.0f}" if unit == "VND" else f"{v:,.2f}"
 
 # ==== Tạo menu ====
 def get_reply_menu():
     s = state.get_state()
-    currency_btn = "💵 USDT Mode" if s["currency_mode"] == "VND" else "💴 VND Mode"
+    # Dùng nhãn USDT cho đúng bản chất
+    currency_btn = "💵 USDT Mode" if s.get("currency_mode") == "VND" else "💴 VND Mode"
     keyboard = [["🔍 Trạng thái", currency_btn]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -81,7 +95,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
 
-    # chuyển đơn vị
+    # Đổi đơn vị USDT/VND
     tl = text.lower()
     if tl in ["💴 vnd mode", "💵 usdt mode"]:
         new_mode = "VND" if "vnd" in tl else "USDT"
@@ -89,19 +103,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"💱 Đã chuyển sang {new_mode}", reply_markup=get_reply_menu())
         return
 
-    # trạng thái
+    # Trạng thái
     if tl == "🔍 trạng thái":
         s = state.get_state()
         unit = "VND" if s.get("currency_mode") == "VND" else "USDT"
         await update.message.reply_text(f"📡 Binance Futures\n• Đơn vị: {unit}", reply_markup=get_reply_menu())
         return
 
-    # danh sách futures
-    all_coins = await get_all_futures()
+    # Lấy danh sách futures (có cache)
+    all_coins = await _get_all_futures_cached(ttl=10)
     if not all_coins:
         await update.message.reply_text("⚠️ Không lấy được dữ liệu từ Binance Futures. Thử lại sau nhé.")
         return
 
+    # Chuẩn hoá và chọn symbol
     cleaned = _clean_symbol(text)               # "OP" -> "OPUSDT"
     query_base = cleaned.replace("USDT", "")    # "OP"
     symbol = _prefer_symbol(query_base, all_coins)
@@ -109,6 +124,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ Không tìm thấy {query_base} trên Binance Futures.")
         return
 
+    # Tìm 24h record của symbol
     coin = None
     for c in all_coins:
         if c.get("symbol") == symbol:
@@ -118,16 +134,24 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ Thiếu dữ liệu 24h cho {symbol}.")
         return
 
+    # Giá hiện tại
     try:
         price = float(coin.get("lastPrice"))
-    except:
+    except Exception:
         await update.message.reply_text(f"⚠️ Không đọc được giá của {symbol}.")
         return
 
+    # Đơn vị hiển thị & tỷ giá
     s = state.get_state()
     unit = "VND" if s.get("currency_mode") == "VND" else "USDT"
-    vnd_rate = await _get_rate_cached() if unit == "VND" else 0.0
+    vnd_rate = 0.0
+    if unit == "VND":
+        try:
+            vnd_rate = await get_usdt_vnd_rate()
+        except Exception:
+            vnd_rate = 0.0
 
+    # Phân tích
     trend = await analyze_coin(symbol)
     if not trend:
         await update.message.reply_text(f"⚠️ Không phân tích được {symbol}.")
