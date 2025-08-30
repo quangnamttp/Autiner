@@ -1,7 +1,5 @@
 import aiohttp
 import traceback
-import os
-import json
 import numpy as np
 
 MEXC_BASE_URL = "https://contract.mexc.com"
@@ -32,16 +30,15 @@ async def get_usdt_vnd_rate() -> float:
             async with session.post(url, json=payload, timeout=15) as resp:
                 data = await resp.json()
                 advs = data.get("data", [])
-                if not advs:
-                    return 0
+                if not advs: return 0
                 prices = [float(ad["adv"]["price"]) for ad in advs[:5] if "adv" in ad]
-                return sum(prices) / len(prices) if prices else 0
+                return sum(prices)/len(prices) if prices else 0
     except Exception as e:
         print(f"[ERROR] get_usdt_vnd_rate: {e}")
         return 0
 
 # =============================
-# Lấy dữ liệu Kline (nến)
+# Lấy dữ liệu Kline
 # =============================
 async def get_kline(symbol: str, interval="Min15", limit=100):
     try:
@@ -58,113 +55,75 @@ async def get_kline(symbol: str, interval="Min15", limit=100):
 # Tính RSI, MACD, EMA, Bollinger
 # =============================
 def calculate_indicators(klines):
-    try:
-        closes = np.array([float(k[4]) for k in klines], dtype=float)
-        ema20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
-        ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else closes[-1]
+    closes = np.array([float(k[4]) for k in klines], dtype=float)
+    if len(closes) < 20: return {}
 
-        deltas = np.diff(closes)
-        ups = deltas[deltas > 0].sum() / 14 if len(deltas) >= 14 else 0
-        downs = -deltas[deltas < 0].sum() / 14 if len(deltas) >= 14 else 0
-        rs = (ups / downs) if downs != 0 else 0
-        rsi = 100 - (100 / (1 + rs)) if rs != 0 else 50
+    # EMA
+    ema20 = np.mean(closes[-20:])
+    ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else np.mean(closes)
 
-        ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else closes[-1]
-        ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else closes[-1]
-        macd = ema12 - ema26
-        signal = np.mean([ema12, ema26])
-        macd_signal = "bullish" if macd > signal else "bearish"
+    # RSI
+    deltas = np.diff(closes)
+    ups = deltas[deltas > 0].sum()/14 if len(deltas) >= 14 else 0
+    downs = -deltas[deltas < 0].sum()/14 if len(deltas) >= 14 else 0
+    rs = (ups/downs) if downs != 0 else 0
+    rsi = 100 - (100/(1+rs)) if rs != 0 else 50
 
-        mid = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
-        std = np.std(closes[-20:]) if len(closes) >= 20 else 0
-        upper = mid + 2 * std
-        lower = mid - 2 * std
-        last_close = closes[-1]
-        if last_close >= upper:
-            bb_status = "gần biên trên"
-        elif last_close <= lower:
-            bb_status = "gần biên dưới"
-        else:
-            bb_status = "trong dải"
+    # MACD
+    ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else np.mean(closes)
+    ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else np.mean(closes)
+    macd = ema12 - ema26
+    signal = np.mean([ema12, ema26])
+    macd_signal = "bullish" if macd > signal else "bearish"
 
-        return {
-            "RSI": round(rsi, 2),
-            "MACD": macd_signal,
-            "EMA20": round(ema20, 6),
-            "EMA50": round(ema50, 6),
-            "Bollinger": bb_status
-        }
-    except Exception as e:
-        print(f"[ERROR] calculate_indicators: {e}")
-        return {}
+    # Bollinger
+    mid = np.mean(closes[-20:])
+    std = np.std(closes[-20:])
+    upper, lower = mid+2*std, mid-2*std
+    last = closes[-1]
+    if last >= upper: bb_status = "gần biên trên"
+    elif last <= lower: bb_status = "gần biên dưới"
+    else: bb_status = "trong dải"
+
+    return {"RSI": round(rsi,2), "MACD": macd_signal,
+            "EMA20": round(ema20,6), "EMA50": round(ema50,6),
+            "Bollinger": bb_status}
 
 # =============================
-# AI phân tích coin
+# Phân tích coin dựa chỉ báo (có lý do rõ ràng)
 # =============================
-async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
-    try:
-        klines = await get_kline(symbol, "Min15", 100)
-        indicators = calculate_indicators(klines) if klines else {}
+async def analyze_coin(symbol: str, price: float, change_pct: float):
+    klines = await get_kline(symbol, "Min15", 100)
+    indicators = calculate_indicators(klines) if klines else {}
+    if not indicators:
+        return {"side": "LONG", "strength": 50, "reason": "Không đủ dữ liệu nến để phân tích"}
 
-        if not indicators:
-            indicators = {"RSI": 50, "MACD": "neutral", "EMA20": price, "EMA50": price, "Bollinger": "không xác định"}
+    rsi, macd, ema20, ema50, bb = indicators["RSI"], indicators["MACD"], indicators["EMA20"], indicators["EMA50"], indicators["Bollinger"]
 
-        OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
-        if not OPENROUTER_KEY:
-            print("[AI ERROR] Chưa có OPENROUTER_API_KEY")
-            return None
+    score_long, score_short = 0, 0
+    reasons = []
 
-        msg = (
-            f"Phân tích coin {symbol}:\n"
-            f"- Giá: {price}\n"
-            f"- Biến động 24h: {change_pct}%\n"
-            f"- Xu hướng thị trường: {market_trend}\n"
-            f"- RSI: {indicators['RSI']}\n"
-            f"- MACD: {indicators['MACD']}\n"
-            f"- EMA20: {indicators['EMA20']}\n"
-            f"- EMA50: {indicators['EMA50']}\n"
-            f"- Bollinger: {indicators['Bollinger']}\n\n"
-            f"👉 Trả về DUY NHẤT JSON hợp lệ: "
-            f"{{\"side\":\"LONG/SHORT\",\"strength\":%,\"reason\":\"ngắn gọn\"}}"
-        )
+    # RSI
+    if rsi < 30:
+        score_long += 2; reasons.append("RSI < 30 (quá bán, dễ hồi LONG)")
+    elif rsi > 70:
+        score_short += 2; reasons.append("RSI > 70 (quá mua, dễ chỉnh SHORT)")
 
-        async with aiohttp.ClientSession() as session:
-            headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
-            payload = {
-                "model": os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free"),
-                "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia crypto. Trả về DUY NHẤT một JSON hợp lệ, không thêm chữ nào khác."},
-                    {"role": "user", "content": msg}
-                ]
-            }
-            async with session.post(
-                os.getenv("OPENROUTER_API_URL","https://openrouter.ai/api/v1/chat/completions"),
-                headers=headers, data=json.dumps(payload), timeout=50
-            ) as resp:
-                data = await resp.json()
-                if "choices" not in data:
-                    print("[AI ERROR]", data)
-                    return None
+    # MACD
+    if macd == "bullish":
+        score_long += 1; reasons.append("MACD bullish (xu hướng tăng)")
+    else:
+        score_short += 1; reasons.append("MACD bearish (xu hướng giảm)")
 
-                ai_text = data["choices"][0]["message"]["content"].strip()
-                print("=== AI RAW OUTPUT ===", ai_text)  # Debug
+    # EMA
+    if ema20 > ema50:
+        score_long += 1; reasons.append("EMA20 > EMA50 (trend tăng)")
+    else:
+        score_short += 1; reasons.append("EMA20 < EMA50 (trend giảm)")
 
-                # Tìm JSON trong text
-                start = ai_text.find("{")
-                end = ai_text.rfind("}") + 1
-                json_str = ai_text[start:end]
+    # Tổng hợp
+    side = "LONG" if score_long >= score_short else "SHORT"
+    strength = 55 + 10*abs(score_long - score_short)  # dao động 55% - 85%
+    reason = "; ".join(reasons) + f"; Bollinger={bb}"
 
-                try:
-                    result = json.loads(json_str)
-                    strength = max(50, min(100, result.get("strength", 70)))
-                    return {
-                        "side": result.get("side", "LONG"),
-                        "strength": strength,
-                        "reason": result.get("reason", "AI phân tích")
-                    }
-                except Exception as e:
-                    print("[AI JSON ERROR]", ai_text, e)
-                    return None
-    except Exception as e:
-        print(f"[ERROR] analyze_coin({symbol}): {e}")
-        return None
+    return {"side": side, "strength": min(90, strength), "reason": reason}
