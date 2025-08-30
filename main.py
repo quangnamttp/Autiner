@@ -9,6 +9,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from autiner_bot.settings import S
 from autiner_bot import menu  # chỉ cần menu
+from autiner_bot.data_sources.binance import diagnose_binance  # cho route /diag
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("autiner")
@@ -48,6 +49,8 @@ def webhook():
         data = request.get_json(force=True, silent=True)
         if not data:
             return "no json", 400
+        # log để debug khi cần
+        log.info("Incoming update: %s", data)
         update = Update.de_json(data, application.bot)
         asyncio.run_coroutine_threadsafe(application.process_update(update), bot_loop)
         return "OK", 200
@@ -63,13 +66,30 @@ def health():
 def home():
     return "Autiner Bot Running", 200
 
+# === Route chẩn đoán Binance (rất hữu ích khi lỗi) ===
+@app.route("/diag", methods=["GET"])
+def diag():
+    fut = asyncio.run_coroutine_threadsafe(diagnose_binance(), bot_loop)
+    info = fut.result(timeout=20)
+    return (
+        "Binance Futures diagnose:\n"
+        f"- ping status: {info.get('ping')}\n"
+        f"- tickers status: {info.get('tickers_status')}\n"
+        f"- tickers len: {info.get('tickers_len')}\n"
+        f"- sample: {str(info.get('sample'))[:200]}\n"
+        f"- error: {info.get('error')}\n",
+        200,
+        {"Content-Type": "text/plain; charset=utf-8"}
+    )
+
 # ========= Threads =========
 def start_bot_loop():
     asyncio.set_event_loop(bot_loop)
+    log.info("[BOT] Starting bot loop…")
     bot_loop.run_until_complete(init_bot())
     bot_loop.run_forever()
 
 if __name__ == "__main__":
     threading.Thread(target=start_bot_loop, daemon=True).start()
-    port = int(os.getenv("PORT", "10000"))  # Render sẽ đặt PORT qua ENV
+    port = int(os.getenv("PORT", "10000"))  # Render set PORT qua ENV
     app.run(host="0.0.0.0", port=port, use_reloader=False)
