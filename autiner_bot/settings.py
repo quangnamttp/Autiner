@@ -10,23 +10,6 @@ class Settings:
     # Timezone
     TZ_NAME: str = os.getenv("TZ_NAME", "Asia/Ho_Chi_Minh")
 
-    # OpenRouter (AI)
-    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
-    OPENROUTER_API_URL: str = os.getenv(
-        "OPENROUTER_API_URL",
-        "https://openrouter.ai/api/v1/chat/completions"
-    )
-    # 🔑 đổi mặc định sang LLaMA free để chắc chắn chạy mượt
-    OPENROUTER_MODEL: str = os.getenv(
-        "OPENROUTER_MODEL",
-        "meta-llama/llama-3.1-8b-instruct:free"
-    )
-
-    # API MEXC
-    MEXC_BASE_URL: str = "https://contract.mexc.com"
-
-    # API Binance P2P (USDT/VND)
+    # API Binance
+    BINANCE_FUTURES_URL: str = "https://fapi.binance.com"
     BINANCE_P2P_URL: str = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-
-
-S = Settings()
