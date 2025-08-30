@@ -57,12 +57,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coin = next(c for c in all_coins if c["symbol"] == symbol)
     vnd_rate = await get_usdt_vnd_rate() if state.get_state()["currency_mode"] == "VND" else None
 
-    # gọi AI phân tích
-    trend = await analyze_coin(symbol, float(coin["lastPrice"]), float(coin["riseFallRate"]) * 100, {"trend":"N/A"})
+    # phân tích bằng chỉ báo (không AI)
+    trend = await analyze_coin(symbol, float(coin["lastPrice"]), float(coin.get("riseFallRate", 0)) * 100)
     if not trend:
-        await update.message.reply_text(f"⚠️ AI không phân tích được {symbol}")
+        await update.message.reply_text(f"⚠️ Không phân tích được {symbol}")
         return
 
+    # format giá
     entry = float(coin["lastPrice"])
     entry_price = entry * vnd_rate if vnd_rate else entry
     tp = entry * (1.01 if trend["side"]=="LONG" else 0.99)
