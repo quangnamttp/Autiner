@@ -13,7 +13,9 @@ async def get_all_futures():
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=15) as resp:
                 data = await resp.json()
-                return data.get("data", [])
+                if not data or "data" not in data:
+                    return []
+                return data["data"]
     except Exception as e:
         print(f"[ERROR] get_all_futures: {e}")
         print(traceback.format_exc())
@@ -24,21 +26,29 @@ async def get_all_futures():
 # =============================
 async def get_usdt_vnd_rate() -> float:
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-    payload = {"asset": "USDT","fiat": "VND","merchantCheck": False,"page": 1,"rows": 10,"tradeType": "SELL"}
+    payload = {
+        "asset": "USDT",
+        "fiat": "VND",
+        "merchantCheck": False,
+        "page": 1,
+        "rows": 10,
+        "tradeType": "SELL"
+    }
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=15) as resp:
                 data = await resp.json()
                 advs = data.get("data", [])
-                if not advs: return 0
+                if not advs:
+                    return 0
                 prices = [float(ad["adv"]["price"]) for ad in advs[:5] if "adv" in ad]
-                return sum(prices)/len(prices) if prices else 0
+                return sum(prices) / len(prices) if prices else 0
     except Exception as e:
         print(f"[ERROR] get_usdt_vnd_rate: {e}")
         return 0
 
 # =============================
-# Lấy dữ liệu Kline
+# Lấy dữ liệu Kline (nến)
 # =============================
 async def get_kline(symbol: str, interval="Min15", limit=100):
     try:
@@ -55,75 +65,80 @@ async def get_kline(symbol: str, interval="Min15", limit=100):
 # Tính RSI, MACD, EMA, Bollinger
 # =============================
 def calculate_indicators(klines):
-    closes = np.array([float(k[4]) for k in klines], dtype=float)
-    if len(closes) < 20: return {}
+    try:
+        closes = np.array([float(k[4]) for k in klines], dtype=float)
 
-    # EMA
-    ema20 = np.mean(closes[-20:])
-    ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else np.mean(closes)
+        ema20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
+        ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else closes[-1]
 
-    # RSI
-    deltas = np.diff(closes)
-    ups = deltas[deltas > 0].sum()/14 if len(deltas) >= 14 else 0
-    downs = -deltas[deltas < 0].sum()/14 if len(deltas) >= 14 else 0
-    rs = (ups/downs) if downs != 0 else 0
-    rsi = 100 - (100/(1+rs)) if rs != 0 else 50
+        # RSI(14)
+        deltas = np.diff(closes)
+        ups = deltas[deltas > 0].sum() / 14 if len(deltas) >= 14 else 0
+        downs = -deltas[deltas < 0].sum() / 14 if len(deltas) >= 14 else 0
+        rs = (ups / downs) if downs != 0 else 0
+        rsi = 100 - (100 / (1 + rs)) if rs != 0 else 50
 
-    # MACD
-    ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else np.mean(closes)
-    ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else np.mean(closes)
-    macd = ema12 - ema26
-    signal = np.mean([ema12, ema26])
-    macd_signal = "bullish" if macd > signal else "bearish"
+        # MACD
+        ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else closes[-1]
+        ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else closes[-1]
+        macd = ema12 - ema26
+        signal = np.mean([ema12, ema26])
+        macd_signal = "bullish" if macd > signal else "bearish"
 
-    # Bollinger
-    mid = np.mean(closes[-20:])
-    std = np.std(closes[-20:])
-    upper, lower = mid+2*std, mid-2*std
-    last = closes[-1]
-    if last >= upper: bb_status = "gần biên trên"
-    elif last <= lower: bb_status = "gần biên dưới"
-    else: bb_status = "trong dải"
+        # Bollinger Bands
+        mid = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
+        std = np.std(closes[-20:]) if len(closes) >= 20 else 0
+        upper = mid + 2 * std
+        lower = mid - 2 * std
+        last_close = closes[-1]
+        if last_close >= upper:
+            bb_status = "gần biên trên"
+        elif last_close <= lower:
+            bb_status = "gần biên dưới"
+        else:
+            bb_status = "trong dải"
 
-    return {"RSI": round(rsi,2), "MACD": macd_signal,
-            "EMA20": round(ema20,6), "EMA50": round(ema50,6),
-            "Bollinger": bb_status}
+        return {
+            "RSI": round(rsi, 2),
+            "MACD": macd_signal,
+            "EMA20": round(ema20, 6),
+            "EMA50": round(ema50, 6),
+            "Bollinger": bb_status
+        }
+    except Exception as e:
+        print(f"[ERROR] calculate_indicators: {e}")
+        return {}
 
 # =============================
-# Phân tích coin dựa chỉ báo (có lý do rõ ràng)
+# Phân tích coin (chỉ báo kỹ thuật)
 # =============================
-async def analyze_coin(symbol: str, price: float, change_pct: float):
-    klines = await get_kline(symbol, "Min15", 100)
-    indicators = calculate_indicators(klines) if klines else {}
-    if not indicators:
-        return {"side": "LONG", "strength": 50, "reason": "Không đủ dữ liệu nến để phân tích"}
+async def analyze_coin(symbol: str, price: float, change_pct: float, market_trend: dict):
+    try:
+        klines = await get_kline(symbol, "Min15", 100)
+        indicators = calculate_indicators(klines) if klines else {
+            "RSI": 50, "MACD": "neutral", "EMA20": price, "EMA50": price, "Bollinger": "không xác định"
+        }
 
-    rsi, macd, ema20, ema50, bb = indicators["RSI"], indicators["MACD"], indicators["EMA20"], indicators["EMA50"], indicators["Bollinger"]
+        rsi = indicators["RSI"]
+        macd = indicators["MACD"]
+        ema20, ema50 = indicators["EMA20"], indicators["EMA50"]
 
-    score_long, score_short = 0, 0
-    reasons = []
+        score_long, score_short = 0, 0
 
-    # RSI
-    if rsi < 30:
-        score_long += 2; reasons.append("RSI < 30 (quá bán, dễ hồi LONG)")
-    elif rsi > 70:
-        score_short += 2; reasons.append("RSI > 70 (quá mua, dễ chỉnh SHORT)")
+        if rsi < 30: score_long += 2
+        elif rsi > 70: score_short += 2
 
-    # MACD
-    if macd == "bullish":
-        score_long += 1; reasons.append("MACD bullish (xu hướng tăng)")
-    else:
-        score_short += 1; reasons.append("MACD bearish (xu hướng giảm)")
+        if macd == "bullish": score_long += 1
+        elif macd == "bearish": score_short += 1
 
-    # EMA
-    if ema20 > ema50:
-        score_long += 1; reasons.append("EMA20 > EMA50 (trend tăng)")
-    else:
-        score_short += 1; reasons.append("EMA20 < EMA50 (trend giảm)")
+        if ema20 > ema50: score_long += 1
+        else: score_short += 1
 
-    # Tổng hợp
-    side = "LONG" if score_long >= score_short else "SHORT"
-    strength = 55 + 10*abs(score_long - score_short)  # dao động 55% - 85%
-    reason = "; ".join(reasons) + f"; Bollinger={bb}"
+        side = "LONG" if score_long >= score_short else "SHORT"
+        strength = min(95, 55 + abs(score_long - score_short) * 10)
+        reason = f"RSI={rsi}, MACD={macd}, EMA20={ema20}, EMA50={ema50}, Bollinger={indicators['Bollinger']}"
 
-    return {"side": side, "strength": min(90, strength), "reason": reason}
+        return {"side": side, "strength": strength, "reason": reason}
+    except Exception as e:
+        print(f"[ERROR] analyze_coin({symbol}): {e}")
+        return {"side": "LONG", "strength": 50, "reason": "Lỗi phân tích - mặc định LONG"}
