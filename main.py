@@ -6,12 +6,9 @@ import logging
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
-from apscheduler.schedulers.background import BackgroundScheduler
-import pytz
 
 from autiner_bot.settings import S
-from autiner_bot import menu
-from autiner_bot import scheduler  # nếu chưa có các job_*, có thể comment các add_job phía dưới
+from autiner_bot import menu  # chỉ cần menu
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("autiner")
@@ -29,6 +26,7 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu.tex
 
 # ========= Webhook helpers =========
 def _get_webhook_base():
+    # Ưu tiên biến ENV của Render; có thể tự set WEBHOOK_BASE nếu cần
     return (
         os.getenv("RENDER_EXTERNAL_URL")
         or os.getenv("WEBHOOK_BASE")
@@ -65,50 +63,6 @@ def health():
 def home():
     return "Autiner Bot Running", 200
 
-# ========= Scheduler =========
-def run_jobs():
-    try:
-        tz = pytz.timezone(S.TZ_NAME)
-        sched = BackgroundScheduler(timezone=tz)
-
-        # 06:00 — Chào buổi sáng
-        sched.add_job(
-            lambda: asyncio.run_coroutine_threadsafe(
-                scheduler.job_morning_message(), bot_loop
-            ),
-            "cron", hour=6, minute=0
-        )
-
-        # Mỗi 30 phút (14’ báo trước, 15’/45’ gửi)
-        for h in range(6, 22):
-            for m in [15, 45]:
-                pre_min = m - 1 if m > 0 else 59
-                sched.add_job(
-                    lambda: asyncio.run_coroutine_threadsafe(
-                        scheduler.job_trade_signals_notice(), bot_loop
-                    ),
-                    "cron", hour=h, minute=pre_min
-                )
-                sched.add_job(
-                    lambda: asyncio.run_coroutine_threadsafe(
-                        scheduler.job_trade_signals(), bot_loop
-                    ),
-                    "cron", hour=h, minute=m
-                )
-
-        # 22:00 — Tổng kết
-        sched.add_job(
-            lambda: asyncio.run_coroutine_threadsafe(
-                scheduler.job_evening_summary(), bot_loop
-            ),
-            "cron", hour=22, minute=0
-        )
-
-        sched.start()
-        log.info("[JOB] Scheduler started")
-    except Exception as e:
-        log.exception("[JOB] Scheduler failed to start: %s", e)
-
 # ========= Threads =========
 def start_bot_loop():
     asyncio.set_event_loop(bot_loop)
@@ -117,6 +71,5 @@ def start_bot_loop():
 
 if __name__ == "__main__":
     threading.Thread(target=start_bot_loop, daemon=True).start()
-    threading.Thread(target=run_jobs, daemon=True).start()
-    port = int(os.getenv("PORT", "10000"))
+    port = int(os.getenv("PORT", "10000"))  # Render sẽ đặt PORT qua ENV
     app.run(host="0.0.0.0", port=port, use_reloader=False)
