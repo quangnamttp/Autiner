@@ -1,25 +1,26 @@
+# autiner_bot/utils/time_utils.py
+"""
+Tiện ích thời gian cho múi giờ Việt Nam.
+"""
+
 from datetime import datetime
 import pytz
-from autiner_bot.settings import S
 
-# Timezone VN lấy từ settings
-VN_TZ = pytz.timezone(S.TZ_NAME)
+VN_TZ = pytz.timezone("Asia/Ho_Chi_Minh")
 
 def get_vietnam_time() -> datetime:
-    """Lấy thời gian hiện tại theo múi giờ VN"""
+    """
+    Lấy datetime hiện tại theo múi giờ Việt Nam.
+    """
     return datetime.now(VN_TZ)
 
-def format_time(dt: datetime | None = None, fmt: str = "%H:%M:%S %d-%m-%Y") -> str:
+# (tuỳ chọn) định dạng nhanh
+def format_vietnam_time(dt: datetime, fmt: str = "%H:%M %d/%m/%Y") -> str:
     """
-    Format thời gian theo định dạng tùy chọn.
-    - Default: 'HH:MM:SS dd-mm-YYYY'
+    Định dạng datetime theo VN timezone. Nếu dt chưa có tz, coi như VN.
     """
-    if dt is None:
-        dt = get_vietnam_time()
+    if dt.tzinfo is None:
+        dt = VN_TZ.localize(dt)
+    else:
+        dt = dt.astimezone(VN_TZ)
     return dt.strftime(fmt)
-
-def utc_to_vietnam(utc_dt: datetime) -> datetime:
-    """Chuyển từ UTC datetime sang VN datetime"""
-    if utc_dt.tzinfo is None:
-        utc_dt = pytz.utc.localize(utc_dt)
-    return utc_dt.astimezone(VN_TZ)
