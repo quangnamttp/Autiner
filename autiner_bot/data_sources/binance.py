@@ -1,4 +1,3 @@
-# autiner_bot/data_sources/binance.py
 import requests
 import asyncio
 import time
@@ -44,7 +43,7 @@ async def get_all_futures(ttl=10):
             return _ALL_TICKERS_CACHE["data"]
 
         url = f"{BINANCE_FUTURES_URL}/fapi/v1/ticker/24hr"
-        data = await asyncio.to_thread(_get_json_sync, url, 25)  # chạy sync trong thread
+        data = await asyncio.to_thread(_get_json_sync, url, 25)
         if isinstance(data, list) and data:
             _ALL_TICKERS_CACHE["ts"] = now
             _ALL_TICKERS_CACHE["data"] = data
@@ -58,7 +57,7 @@ async def get_all_futures(ttl=10):
 # =============================
 # Kline (Futures)
 # =============================
-async def get_kline(symbol: str, interval="15m", limit=250):
+async def get_kline(symbol: str, interval="15m", limit=200):
     try:
         symbol = symbol.upper()
         url = f"{BINANCE_FUTURES_URL}/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
@@ -70,7 +69,7 @@ async def get_kline(symbol: str, interval="15m", limit=250):
         return []
 
 # =============================
-# P2P USDT/VND (dùng requests luôn)
+# P2P USDT/VND
 # =============================
 async def get_usdt_vnd_rate() -> float:
     payload = {
@@ -102,32 +101,120 @@ async def get_usdt_vnd_rate() -> float:
         return 0.0
 
 # =============================
-# (GIỮ nguyên calculate_indicators() & analyze_coin() của bạn)
+# Indicator helpers
 # =============================
+def calculate_indicators(klines):
+    try:
+        closes = np.array([float(k[4]) for k in klines], dtype=float)
+        if len(closes) < 26:
+            return {}
 
-# ===== Diagnose (để test nhanh trên server) =====
+        # EMA
+        ema20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
+        ema50 = np.mean(closes[-50:]) if len(closes) >= 50 else closes[-1]
+
+        # RSI (14)
+        deltas = np.diff(closes)
+        ups = deltas[deltas > 0].sum() / 14 if len(deltas) >= 14 else 0
+        downs = -deltas[deltas < 0].sum() / 14 if len(deltas) >= 14 else 0
+        rs = (ups / downs) if downs != 0 else 0
+        rsi = 100 - (100 / (1 + rs)) if rs != 0 else 50
+
+        # MACD
+        ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else closes[-1]
+        ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else closes[-1]
+        macd = ema12 - ema26
+        signal = np.mean([ema12, ema26])
+        macd_signal = "bullish" if macd > signal else "bearish"
+
+        # Bollinger
+        mid = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
+        std = np.std(closes[-20:]) if len(closes) >= 20 else 0
+        upper = mid + 2 * std
+        lower = mid - 2 * std
+        last_close = closes[-1]
+        if last_close >= upper:
+            bb_status = "gần biên trên"
+        elif last_close <= lower:
+            bb_status = "gần biên dưới"
+        else:
+            bb_status = "trong dải"
+
+        return {
+            "RSI": round(rsi, 2),
+            "MACD": macd_signal,
+            "EMA20": round(ema20, 6),
+            "EMA50": round(ema50, 6),
+            "Bollinger": bb_status,
+            "last_close": last_close
+        }
+    except Exception as e:
+        print(f"[ERROR] calculate_indicators: {e}")
+        return {}
+
+# =============================
+# Phân tích coin
+# =============================
+async def analyze_coin(symbol: str):
+    try:
+        klines = await get_kline(symbol, "15m", 200)
+        indicators = calculate_indicators(klines) if klines else {}
+        if not indicators:
+            return {"side": "LONG", "strength": 50, "reason": "Không đủ dữ liệu"}
+
+        rsi, macd = indicators["RSI"], indicators["MACD"]
+        ema20, ema50 = indicators["EMA20"], indicators["EMA50"]
+
+        score_long, score_short = 0, 0
+        reasons = []
+
+        # RSI
+        if rsi < 30:
+            score_long += 2; reasons.append("RSI thấp (<30) → quá bán")
+        elif rsi > 70:
+            score_short += 2; reasons.append("RSI cao (>70) → quá mua")
+
+        # MACD
+        if macd == "bullish":
+            score_long += 1; reasons.append("MACD bullish")
+        elif macd == "bearish":
+            score_short += 1; reasons.append("MACD bearish")
+
+        # EMA
+        if ema20 > ema50:
+            score_long += 1; reasons.append("EMA20 > EMA50 → xu hướng tăng")
+        else:
+            score_short += 1; reasons.append("EMA20 < EMA50 → xu hướng giảm")
+
+        # Bollinger
+        reasons.append(f"Bollinger: {indicators['Bollinger']}")
+
+        side = "LONG" if score_long >= score_short else "SHORT"
+        strength = 50 + 10 * abs(score_long - score_short)
+        reason = "; ".join(reasons)
+
+        return {"side": side, "strength": min(90, strength), "reason": reason}
+    except Exception as e:
+        print(f"[ERROR] analyze_coin({symbol}): {e}")
+        return {"side": "LONG", "strength": 50, "reason": "Lỗi phân tích"}
+
+# =============================
+# Diagnose Binance (test route /diag)
+# =============================
 async def diagnose_binance():
     info = {"ping": None, "tickers_status": None, "tickers_len": None, "sample": None, "error": None}
     try:
-        # ping
-        try:
-            r1 = requests.get(f"{BINANCE_FUTURES_URL}/fapi/v1/ping", headers=HTTP_HEADERS, timeout=10)
-            info["ping"] = r1.status_code
-        except Exception as e:
-            info["error"] = f"ping_error: {e}"
+        r1 = requests.get(f"{BINANCE_FUTURES_URL}/fapi/v1/ping", headers=HTTP_HEADERS, timeout=10)
+        info["ping"] = r1.status_code
 
-        # tickers
-        try:
-            r2 = requests.get(f"{BINANCE_FUTURES_URL}/fapi/v1/ticker/24hr", headers=HTTP_HEADERS, timeout=15)
-            info["tickers_status"] = r2.status_code
-            if r2.status_code == 200:
-                js = r2.json()
-                info["tickers_len"] = len(js) if isinstance(js, list) else None
-                info["sample"] = js[0] if isinstance(js, list) and js else None
-            else:
-                info["error"] = r2.text[:300]
-        except Exception as e:
-            info["error"] = f"tickers_error: {e}"
+        r2 = requests.get(f"{BINANCE_FUTURES_URL}/fapi/v1/ticker/24hr", headers=HTTP_HEADERS, timeout=15)
+        info["tickers_status"] = r2.status_code
+        if r2.status_code == 200:
+            js = r2.json()
+            info["tickers_len"] = len(js) if isinstance(js, list) else None
+            info["sample"] = js[0] if isinstance(js, list) and js else None
+        else:
+            info["error"] = r2.text[:300]
     except Exception as e:
-        info["error"] = f"{e}"
+        info["error"] = str(e)
     return info
